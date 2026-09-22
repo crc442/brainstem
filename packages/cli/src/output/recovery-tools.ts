@@ -1,9 +1,11 @@
 import { Type } from "@sinclair/typebox";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
-import { InvalidPatternError, REVIEW_CHAR_CAP, searchContent, sliceByLines, splitLines, type ArtifactStore } from "@brainstem/core";
+import { boundForReview, InvalidPatternError, REVIEW_CHAR_CAP, searchContent, sliceByLines, splitLines, type ArtifactStore } from "@brainstem/core";
 
 export interface RecoveryToolDeps {
   store: ArtifactStore;
+  /** Test-only override for searchContent's internal scan cap, so mid-scan-clip behavior can be exercised with small fixtures instead of literal million-character ones. Production uses the real default. */
+  maxScanChars?: number;
 }
 
 const READ_DEFAULT_LINES = 200;
@@ -204,7 +206,10 @@ export function makeRecoveryTools(deps: RecoveryToolDeps): AgentTool[] {
     stream: Type.Optional(Type.String({ description: "Which captured stream to search (e.g. \"stdout\", \"stderr\", or \"output\"); defaults to stdout/output" })),
     pattern: Type.String({ description: "Regular expression to search for" }),
     limit: Type.Optional(Type.Number({ description: `Maximum matches to return (default ${SEARCH_DEFAULT_LIMIT})` })),
-    startLine: Type.Optional(Type.Number({ description: "Resume scanning from this line (1-indexed, default 1) — use the totalScanned receipt from a truncated search to continue coverage without gaps or re-scanning." })),
+    startLine: Type.Optional(Type.Number({ description: "Resume scanning from this line (1-indexed, default 1) — use the continuation notice from a truncated search to continue coverage without gaps or re-scanning." })),
+    startCharInLine: Type.Optional(
+      Type.Number({ description: "Resume mid-line after a scan that was cut off before reaching this line's end (from a previous page's continuation notice); character offset within startLine's own text." }),
+    ),
   });
   const searchOutput: AgentTool<typeof searchParams> = {
     name: "search_output",
@@ -235,12 +240,24 @@ export function makeRecoveryTools(deps: RecoveryToolDeps): AgentTool[] {
 
       const allLines = splitLines(content);
       const startLine = clampInt(params.startLine, 1, Math.max(1, allLines.length));
-      const scanFrom = allLines.slice(startLine - 1).join("\n");
+      // Resuming mid-line (after a scan that was cut off before reaching
+      // this line's own end) means scanning the REMAINDER of startLine, not
+      // its full text — otherwise the already-scanned prefix would be
+      // rescanned and, worse, byte/char positions in receipts would drift.
+      const startCharInLine = clampInt(params.startCharInLine, 0, Number.MAX_SAFE_INTEGER, 0);
+      const currentLineFull = allLines[startLine - 1] ?? "";
+      const currentLineRemainder = currentLineFull.slice(Math.min(startCharInLine, currentLineFull.length));
+      const scanFrom = [currentLineRemainder, ...allLines.slice(startLine)].join("\n");
       const complete = entry.meta.streams[stream]?.complete ?? entry.meta.captureComplete;
 
       let result;
       try {
-        result = searchContent(scanFrom, params.pattern, clampInt(params.limit, SEARCH_DEFAULT_LIMIT, Number.MAX_SAFE_INTEGER));
+        result = searchContent(
+          scanFrom,
+          params.pattern,
+          clampInt(params.limit, SEARCH_DEFAULT_LIMIT, Number.MAX_SAFE_INTEGER),
+          deps.maxScanChars,
+        );
       } catch (error) {
         if (error instanceof InvalidPatternError) {
           return {
@@ -255,47 +272,134 @@ export function makeRecoveryTools(deps: RecoveryToolDeps): AgentTool[] {
         }
         throw error;
       }
-      // Line numbers from searchContent are relative to `scanFrom`; rebase to the full capture.
+      // Line numbers from searchContent are relative to `scanFrom`, whose
+      // first "line" is startLine's own remainder — so line 1 of scanFrom
+      // IS original line `startLine` (not startLine+1), same numbering as
+      // if there were no character offset at all.
       const rebasedMatches = result.matches.map((m) => ({ line: m.line + startLine - 1, text: m.text }));
-      // Truthful coverage: scannedLines reflects what searchContent actually
-      // scanned (short of the full scanFrom when MAX_SCAN_CHARS clipped it),
-      // never the full requested range regardless of clipping.
-      const scannedTo = startLine - 1 + result.scannedLines;
+
+      // Determine whether the scan cap landed mid-line (as opposed to
+      // exactly on a line boundary, or not clipping at all). A single very
+      // long line can make MAX_SCAN_CHARS cut it off before its own
+      // terminating newline; resuming at "the next line" in that case would
+      // permanently skip the unscanned remainder of THIS line — including
+      // any match within it — since a later call would never look at those
+      // characters again. This is the actual defect an earlier version had:
+      // scannedLines alone can't distinguish "this line was fully scanned
+      // and just happens to be the last one" from "this line was cut off
+      // mid-way", so scannedChars (the exact scanned prefix) is needed.
+      let scanClippedMidLine = false;
+      let midLineResumeLine = startLine;
+      let midLineResumeChar = 0;
+      let fullyScannedThroughLine = startLine - 1; // last line fully covered by this scan, for a truthful "scanned X of Y" receipt
+      if (result.scanClipped) {
+        const scannedPrefix = scanFrom.slice(0, result.scannedChars);
+        const lastNewlineIdx = scannedPrefix.lastIndexOf("\n");
+        const cutAtLineBoundary = lastNewlineIdx === scannedPrefix.length - 1;
+        if (!cutAtLineBoundary) {
+          scanClippedMidLine = true;
+          if (lastNewlineIdx === -1) {
+            // Still within scanFrom's first line, i.e. startLine's own remainder.
+            midLineResumeLine = startLine;
+            midLineResumeChar = startCharInLine + scannedPrefix.length;
+            fullyScannedThroughLine = startLine - 1;
+          } else {
+            const linesFullyConsumedInScanFrom = splitLines(scannedPrefix.slice(0, lastNewlineIdx + 1)).length;
+            midLineResumeLine = startLine + linesFullyConsumedInScanFrom;
+            midLineResumeChar = scannedPrefix.length - (lastNewlineIdx + 1);
+            fullyScannedThroughLine = midLineResumeLine - 1;
+          }
+        } else {
+          fullyScannedThroughLine = startLine - 1 + result.scannedLines;
+        }
+      } else {
+        fullyScannedThroughLine = startLine - 1 + result.scannedLines;
+      }
 
       // Bound the delivered page to the same review budget as everything
       // else: a match list found within scan+limit can still be too large
       // to deliver in one page (long matched lines, or many of them).
       const matchLines = rebasedMatches.map((m) => `${m.line}: ${m.text}`);
       const bodyFit = fitWholeLines(matchLines, PAGE_BODY_CHAR_CAP);
-      const deliveredMatches = rebasedMatches.slice(0, bodyFit.count);
-      const pageBounded = bodyFit.count < rebasedMatches.length;
+      let deliveredMatches: { line: number; text: string }[];
+      let renderedBody: string;
+      let matchTruncated = false;
+      if (bodyFit.count > 0) {
+        deliveredMatches = rebasedMatches.slice(0, bodyFit.count);
+        renderedBody = bodyFit.text;
+      } else if (rebasedMatches.length > 0) {
+        // Even the FIRST match's formatted line doesn't fit the page whole.
+        // Never silently drop a match that WAS found: deliver a bounded,
+        // explicitly truncated preview and point at how to recover the
+        // full line via read_output, instead of reporting "no matches" and
+        // skipping past it.
+        const first = rebasedMatches[0]!;
+        const bounded = boundForReview(matchLines[0]!, PAGE_BODY_CHAR_CAP);
+        renderedBody = `${bounded.text}\n[brainstem] match on line ${first.line} truncated — use read_output with startLine=${first.line} to recover it in full.`;
+        deliveredMatches = [first];
+        matchTruncated = true;
+      } else {
+        deliveredMatches = [];
+        renderedBody = "";
+      }
+      const pageBounded = deliveredMatches.length < rebasedMatches.length || matchTruncated;
 
       // Continuation: whenever there's more to find than was delivered here
       // — whether because of the match `limit`, the page's own character
-      // budget, or searchContent's own MAX_SCAN_CHARS clip — resume right
-      // after the last DELIVERED match (not at the scan boundary), so
-      // matches already found but not yet shown are never skipped. Only
-      // when nothing was delivered at all does resuming from the scan
-      // boundary become correct (there's nothing earlier to resume after).
+      // budget, or the scan cap — resume right after the last DELIVERED
+      // match when one exists (safe regardless of a mid-line clip: it is
+      // always at or before the true scan boundary, so at worst it
+      // re-scans a little, never skips). Only when NOTHING was delivered
+      // does the exact scan boundary matter, and a mid-line clip there must
+      // resume WITHIN that line, not skip past its unscanned remainder.
       const hasMoreToDeliver = pageBounded || result.truncated;
-      const resumeLine = hasMoreToDeliver
-        ? deliveredMatches.length > 0
-          ? deliveredMatches[deliveredMatches.length - 1]!.line + 1
-          : scannedTo + 1
-        : undefined;
+      let resumeLine: number | undefined;
+      let resumeCharInLine: number | undefined;
+      if (hasMoreToDeliver) {
+        if (deliveredMatches.length > 0) {
+          resumeLine = deliveredMatches[deliveredMatches.length - 1]!.line + 1;
+        } else if (scanClippedMidLine) {
+          resumeLine = midLineResumeLine;
+          resumeCharInLine = midLineResumeChar;
+        } else {
+          resumeLine = fullyScannedThroughLine + 1;
+        }
+      }
 
       const notes: string[] = [];
-      if (result.scanClipped) notes.push("scan bounded by size — matches beyond the scanned range are not yet known");
-      if (pageBounded) notes.push(`page bounded — showing ${deliveredMatches.length} of ${rebasedMatches.length} matches found in this range`);
-      const header = `artifact ${params.id} stream ${stream} search "${params.pattern}" from line ${startLine}: ${result.totalMatches} match(es) found in lines ${startLine}-${scannedTo} of ${allLines.length} (${entryOutcome(complete)}${notes.length > 0 ? `, ${notes.join("; ")}` : ""})`;
-      const continuationNotice = resumeLine !== undefined ? `\n[brainstem] continue with startLine=${resumeLine} to cover the rest.` : "";
-      const text =
-        deliveredMatches.length === 0
-          ? `${header}\nno matches${continuationNotice}`
-          : `${header}\n${deliveredMatches.map((m) => `${m.line}: ${m.text}`).join("\n")}${continuationNotice}`;
+      if (scanClippedMidLine) {
+        notes.push(`scan bounded by size mid-line — line ${midLineResumeLine} only partially scanned (${midLineResumeChar} chars)`);
+      } else if (result.scanClipped) {
+        notes.push("scan bounded by size — matches beyond the scanned range are not yet known");
+      }
+      if (matchTruncated) {
+        notes.push(`showing 1 of ${rebasedMatches.length} match(es) in this range, truncated (see note below to recover it in full)`);
+      } else if (pageBounded) {
+        notes.push(`page bounded — showing ${deliveredMatches.length} of ${rebasedMatches.length} matches found in this range`);
+      }
+      // fullyScannedThroughLine can be startLine - 1 (zero WHOLE lines
+      // covered) when the very first line is itself cut off mid-scan —
+      // "lines N-(N-1)" would read as a backwards range, so phrase that
+      // case as "no complete lines yet" instead of a nonsensical span.
+      const coverageText =
+        fullyScannedThroughLine >= startLine
+          ? `lines ${startLine}-${fullyScannedThroughLine} of ${allLines.length}`
+          : `no complete lines yet (line ${startLine} in progress) of ${allLines.length}`;
+      const header = `artifact ${params.id} stream ${stream} search "${params.pattern}" from line ${startLine}: ${result.totalMatches} match(es) found in ${coverageText} (${entryOutcome(complete)}${notes.length > 0 ? `, ${notes.join("; ")}` : ""})`;
+      const continuationNotice =
+        resumeLine !== undefined
+          ? `\n[brainstem] continue with startLine=${resumeLine}${resumeCharInLine !== undefined ? `, startCharInLine=${resumeCharInLine}` : ""} to cover the rest.`
+          : "";
+      const text = renderedBody.length === 0 ? `${header}\nno matches${continuationNotice}` : `${header}\n${renderedBody}${continuationNotice}`;
       return {
         content: [{ type: "text", text }],
-        details: { outcome: "ok", totalMatches: result.totalMatches, truncated: result.truncated, scannedTo, delivered: deliveredMatches.length },
+        details: {
+          outcome: "ok",
+          totalMatches: result.totalMatches,
+          truncated: result.truncated,
+          scannedTo: fullyScannedThroughLine,
+          delivered: deliveredMatches.length,
+        },
       };
     },
   };

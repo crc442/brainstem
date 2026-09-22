@@ -277,17 +277,27 @@ describe("R5/R6: read_output — full recovery, byte-precise pagination, honest 
  * match line number in the order received, so a caller can assert exact,
  * gap-free, duplicate-free coverage.
  */
+/**
+ * Pages through search_output end to end using its OWN continuation notice
+ * (never a caller-assumed formula), following both startLine= and — when
+ * offered — startCharInLine= (a scan clipped mid-line). Returns every
+ * delivered match line number in the order received, plus the total number
+ * of pages it took, so a caller can assert exact, gap-free,
+ * duplicate-free coverage and that pagination actually terminates.
+ */
 async function reconstructSearchMatches(
   searchOutput: { execute: (id: string, params: Record<string, unknown>) => Promise<unknown> },
   id: string,
   pattern: string,
-  opts: { limit?: number; maxPages?: number } = {},
-): Promise<number[]> {
+  opts: { limit?: number; maxPages?: number; maxScanCharsNote?: boolean } = {},
+): Promise<{ lines: number[]; pages: number }> {
   const maxPages = opts.maxPages ?? 1_000;
   const found: number[] = [];
   let startLine = 1;
+  let startCharInLine = 0;
   for (let i = 0; i < maxPages; i++) {
     const params: Record<string, unknown> = { id, pattern, startLine };
+    if (startCharInLine > 0) params.startCharInLine = startCharInLine;
     if (opts.limit !== undefined) params.limit = opts.limit;
     const result = (await searchOutput.execute("x", params)) as {
       content: { text: string }[];
@@ -296,11 +306,20 @@ async function reconstructSearchMatches(
     if (result.details.outcome !== "ok") throw new Error(`reconstructSearchMatches: unexpected outcome ${result.details.outcome} at page ${i}`);
     const raw = textOf(result);
     for (const m of raw.matchAll(/^(\d+): /gm)) found.push(Number(m[1]));
-    const cont = raw.match(/startLine=(\d+)/);
-    if (!cont) return found;
-    const next = Number(cont[1]);
-    if (next <= startLine) throw new Error(`reconstructSearchMatches: no forward progress at page ${i} (startLine stayed ${startLine})`);
-    startLine = next;
+    // Anchored on "continue with" specifically — a truncated-match preview
+    // ALSO mentions "startLine=" (in its "use read_output with startLine=N"
+    // recovery pointer), which is a different thing entirely and must not
+    // be mistaken for the actual continuation notice.
+    const cont = raw.match(/continue with startLine=(\d+)(?:, startCharInLine=(\d+))?/);
+    if (!cont) return { lines: found, pages: i + 1 };
+    const nextLine = Number(cont[1]);
+    const nextChar = cont[2] !== undefined ? Number(cont[2]) : 0;
+    const progressed = nextLine > startLine || (nextLine === startLine && nextChar > startCharInLine);
+    if (!progressed) {
+      throw new Error(`reconstructSearchMatches: no forward progress at page ${i} (stayed at line ${startLine}, char ${startCharInLine})`);
+    }
+    startLine = nextLine;
+    startCharInLine = nextChar;
   }
   throw new Error(`reconstructSearchMatches: did not terminate within ${maxPages} pages`);
 }
@@ -318,7 +337,7 @@ describe("R6: search_output — cursor coverage and stream awareness", () => {
     expect(first.details.truncated).toBe(true);
     expect(first.details.totalMatches).toBe(10);
 
-    const allMatchLines = await reconstructSearchMatches(searchOutput, id, "^MARK-", { limit: 5, maxPages: 20 });
+    const { lines: allMatchLines } = await reconstructSearchMatches(searchOutput, id, "^MARK-", { limit: 5, maxPages: 20 });
     expect(allMatchLines).toEqual(expectedLines);
     // Exactly once each — no duplicates introduced by an off-by-one resume.
     expect(new Set(allMatchLines).size).toBe(expectedLines.length);
@@ -373,8 +392,99 @@ describe("R6: search_output — cursor coverage and stream awareness", () => {
     expect(text.length).toBeLessThan(8_000); // fits the shared review boundary on its own — no external re-clip needed
 
     // Every match is still recoverable via the offered continuation, exactly once.
-    const allMatchLines = await reconstructSearchMatches(searchOutput, id, "MATCH", { limit: matchCount, maxPages: 20 });
+    const { lines: allMatchLines } = await reconstructSearchMatches(searchOutput, id, "MATCH", { limit: matchCount, maxPages: 20 });
     expect(allMatchLines).toEqual(Array.from({ length: matchCount }, (_, i) => i + 1));
+  });
+
+  test("R6 regression: a match on a single line larger than a page is delivered as a bounded truncated preview, never silently reported as 'no matches'", async () => {
+    const { store, searchOutput } = setup();
+    // A single line whose OWN formatted match text exceeds the page body
+    // cap — the exact reproduction: fitWholeLines can't fit even one
+    // match, and the old code reported "no matches" while skipping the
+    // line that DID match by resuming at scannedTo+1.
+    const content = `MATCH${"x".repeat(9_000)}\ntail`;
+    const id = putArtifact(store, { output: content });
+
+    const first = (await searchOutput.execute("x", { id, pattern: "MATCH" })) as {
+      content: { text: string }[];
+      details: { outcome: string; totalMatches: number; delivered: number };
+    };
+    expect(first.details.totalMatches).toBe(1);
+    // The match must be DELIVERED (bounded/truncated), not omitted.
+    expect(first.details.delivered).toBe(1);
+    const text1 = textOf(first);
+    expect(text1).toContain("1: MATCH");
+    expect(text1).toContain("truncated");
+    expect(text1).toContain("read_output with startLine=1");
+    expect(text1.length).toBeLessThan(8_000); // provider-visible receipt/page bound
+
+    // Full pagination terminates and still finds the match exactly once —
+    // it must never be skipped by the continuation.
+    const { lines, pages } = await reconstructSearchMatches(searchOutput, id, "MATCH", { maxPages: 10 });
+    expect(lines).toEqual([1]);
+    expect(pages).toBeGreaterThanOrEqual(1);
+
+    // The full line is separately recoverable in full via read_output, as promised.
+    const [readOutput] = makeRecoveryTools({ store });
+    const full = await reconstructRead(readOutput!, id, { maxPages: 10 });
+    expect(full).toBe(content);
+  });
+
+  test("R6 regression: a scan cut off mid-line (not on a line boundary) resumes within that line instead of skipping its unscanned remainder", async () => {
+    const { store, searchOutput } = setup();
+    // A single huge first line whose match ("MATCH") sits entirely PAST
+    // where a small scan cap would cut it off mid-line — reproduces the
+    // second bug with a small, fast fixture via the maxScanChars override
+    // instead of a literal million-character one.
+    const content = `${"x".repeat(500)}MATCH\ntail`;
+    const id = putArtifact(store, { output: content });
+    const [, searchWithSmallCap] = makeRecoveryTools({ store, maxScanChars: 200 });
+
+    const first = (await searchWithSmallCap!.execute("x", { id, pattern: "MATCH" })) as {
+      content: { text: string }[];
+      details: { outcome: string; totalMatches: number };
+    };
+    expect(first.details.totalMatches).toBe(0); // MATCH is beyond the 200-char scan window
+    const text1 = textOf(first);
+    expect(text1).toContain("mid-line");
+    const contMatch = text1.match(/startLine=(\d+), startCharInLine=(\d+)/);
+    expect(contMatch).not.toBeNull();
+    expect(Number(contMatch![1])).toBe(1); // still within line 1, not skipped to line 2
+    expect(Number(contMatch![2])).toBe(200);
+
+    // Full pagination (using the SAME small cap) terminates and eventually finds it.
+    const { lines } = await reconstructSearchMatches(searchWithSmallCap!, id, "MATCH", { maxPages: 20 });
+    expect(lines).toEqual([1]);
+  });
+
+  test("R6: search over Unicode content finds matches at the correct line and reconstructs the match text exactly", async () => {
+    const { store, searchOutput } = setup();
+    const lines = ["línea uno", "línea dos con 🎉 emoji", "MATCH: héllo wörld", "línea final"];
+    const id = putArtifact(store, { output: lines.join("\n") });
+    const result = (await searchOutput.execute("x", { id, pattern: "MATCH" })) as {
+      content: { text: string }[];
+      details: { totalMatches: number };
+    };
+    expect(result.details.totalMatches).toBe(1);
+    expect(textOf(result)).toContain("3: MATCH: héllo wörld");
+  });
+
+  test("R6: ordinary limit pagination stays within the provider-visible page bound and terminates", async () => {
+    const { store, searchOutput } = setup();
+    const total = 30;
+    const content = Array.from({ length: total }, (_, i) => `MATCH-${i}`).join("\n");
+    const id = putArtifact(store, { output: content });
+
+    const first = (await searchOutput.execute("x", { id, pattern: "MATCH", limit: 7 })) as {
+      content: { text: string }[];
+      details: { totalMatches: number };
+    };
+    expect(first.details.totalMatches).toBe(total);
+    expect(textOf(first).length).toBeLessThan(8_000);
+
+    const { lines, pages } = await reconstructSearchMatches(searchOutput, id, "MATCH", { limit: 7, maxPages: 10 });
+    expect(lines).toEqual(Array.from({ length: total }, (_, i) => i + 1));
+    expect(pages).toBeGreaterThan(1); // actually paginated, not a single lucky call
   });
 
   test("a foreign artifact id / unknown stream for search fails explicitly, not silently empty", async () => {

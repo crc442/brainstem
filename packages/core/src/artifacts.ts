@@ -86,27 +86,30 @@ export function sliceByLines(
 
 // Regex work is capped by scanning at most this many characters, so a huge
 // capture cannot turn search_output into a hang; matches are capped at `limit`.
-const MAX_SCAN_CHARS = 1_000_000;
+export const DEFAULT_MAX_SCAN_CHARS = 1_000_000;
 
 export interface SearchResult {
   matches: { line: number; text: string }[];
   totalMatches: number;
   truncated: boolean;
-  /** True only when MAX_SCAN_CHARS cut the input short — distinct from `truncated`, which is also set by an ordinary `limit`. */
+  /** True only when the scan cap cut the input short — distinct from `truncated`, which is also set by an ordinary `limit`. */
   scanClipped: boolean;
   /** Lines actually scanned within the given `content` — may be fewer than its total line count when `scanClipped` is true. A caller computing a coverage receipt must use this, not the line count of its own unclipped input, or it will overstate how much was actually searched. */
   scannedLines: number;
+  /** Exact character count actually scanned (== content.length unless scanClipped). Lets a caller determine whether the scan cap landed exactly on a line boundary or mid-line, which `scannedLines` alone cannot distinguish. */
+  scannedChars: number;
 }
 
-export function searchContent(content: string, pattern: string, limit = 50): SearchResult {
+export function searchContent(content: string, pattern: string, limit = 50, maxScanChars: number = DEFAULT_MAX_SCAN_CHARS): SearchResult {
   let re: RegExp;
   try {
     re = new RegExp(pattern);
   } catch (cause) {
     throw new InvalidPatternError(pattern, cause);
   }
-  const scanClipped = content.length > MAX_SCAN_CHARS;
-  const lines = splitLines(scanClipped ? content.slice(0, MAX_SCAN_CHARS) : content);
+  const scanClipped = content.length > maxScanChars;
+  const scannedChars = scanClipped ? maxScanChars : content.length;
+  const lines = splitLines(scanClipped ? content.slice(0, maxScanChars) : content);
   const cap = Math.max(0, Math.floor(limit));
   const matches: { line: number; text: string }[] = [];
   let totalMatches = 0;
@@ -115,7 +118,14 @@ export function searchContent(content: string, pattern: string, limit = 50): Sea
     totalMatches += 1;
     if (matches.length < cap) matches.push({ line: i + 1, text: lines[i]! });
   }
-  return { matches, totalMatches, truncated: totalMatches > matches.length || scanClipped, scanClipped, scannedLines: lines.length };
+  return {
+    matches,
+    totalMatches,
+    truncated: totalMatches > matches.length || scanClipped,
+    scanClipped,
+    scannedLines: lines.length,
+    scannedChars,
+  };
 }
 
 export function contentHash(content: string): string {
