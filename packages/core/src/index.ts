@@ -21,7 +21,7 @@ export { hashAction, canonicalJson, newId } from "./evidence";
 export { boundForReview, REVIEW_CHAR_CAP } from "./presentation";
 export type { BoundedText } from "./presentation";
 export { expandHome, normalizeAbsolute, realpathIfExists, resolvePath, isInside, resolveParentForWrite } from "./paths";
-export { contentHash, countLines, searchContent, sliceByLines, splitLines, InvalidPatternError, ARTIFACT_SCHEMA_VERSION } from "./artifacts";
+export { contentHash, countLines, searchContent, sliceByLines, splitLines, InvalidPatternError, ARTIFACT_SCHEMA_VERSION, DEFAULT_MAX_SCAN_CHARS } from "./artifacts";
 export type { ArtifactMeta, ArtifactRecord, ArtifactEntry, ArtifactStore, StreamMeta, SearchResult } from "./artifacts";
 export type { ApprovalResolution, ApprovalRequest, ApprovalHandler } from "./approval";
 export type { TaskState, ToolObservation, ToolStatus } from "./evidence";
