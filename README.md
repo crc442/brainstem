@@ -70,36 +70,66 @@ tool result telling the agent to ask the user, and the CLI exits nonzero.
 
 ## Write safety
 
-Every write (both the harness's pre-execution gate and the `write` tool's own
-execution) resolves the target through one shared canonical resolver
-(`packages/core/src/paths.ts`, reused by `packages/core/src/floor.ts`'s static
-policy and `packages/cli/src/paths.ts`'s execution helpers), and rejects a
-write whose final path component is a symlink — existing (inside or outside
-the root) or dangling — with an explicit blocked outcome, before Jev ever sees
-it. The write itself lands via a same-directory temp file + atomic rename,
-which never dereferences a destination symlink and never truncates a
-hard-linked file's shared inode in place; an existing file's permission bits
-are preserved onto the replacement rather than reset to the process default.
+Every in-root write — the common case, and the one that can be auto-approved
+without a human ever reviewing it — is executed by a real descriptor-relative
+(`openat`-style) filesystem executor
+(`packages/cli/src/native/verified-write.py`, invoked as a subprocess from
+`packages/cli/src/paths.ts`), not by a path-based check followed by a
+separate path-based write. It opens the canonical project root once, then
+walks each remaining path component relative to the *previously verified
+parent directory's own file descriptor* with `O_NOFOLLOW`, and only ever
+writes and renames within that final verified directory's fd. A symlink
+substituted into any ancestor — before this executor starts, or between two
+of its own component checks — cannot redirect the write, because the walk
+never re-resolves a path string from scratch and never follows a symlink it
+encounters. The same verified fd chain also checks (when the harness supplies
+one) that the target's *current content* still matches a sha256 digest
+computed at authorization time, so a concurrent edit is rejected exactly like
+a concurrent symlink swap — target and preimage are both bound through
+execution, not just checked beforehand. An existing file's permission bits
+are preserved onto the replacement.
 
-The harness also binds execution to the specific target and file content it
-resolved *before* asking Jev: since a Jev call is an await point, it rechecks
-target identity and a preimage digest immediately after the gate decision
-returns, for every outcome (not just "ask" — an "auto" decision gets the same
-check). A parent directory swapped for a symlink, or the file edited, while
-that call was in flight is caught there rather than silently followed.
+Neither Bun nor Node expose `openat`, so this executor is a `python3` (or
+`python`) subprocess — verified once per process to support the required
+`os.*(dir_fd=...)` operations, then cached. **If no such interpreter is
+available (or on Windows), in-root managed writes are explicitly REFUSED** —
+`writeCapability()` reports `"unavailable"` and every write attempt fails
+with a clear reason, rather than silently falling back to a path-based
+check-then-write that only looks equally safe. The original review
+remediation plan for R2 does not contain an escape hatch that permits an
+unsafe managed write to stay enabled; "unavailable" is that plan's own
+prescribed outcome, not a workaround for not having built the real thing.
 
-**Supported guarantee:** final-symlink rejection, hardlink-safe atomic
-replacement, permission preservation, and binding an "auto" or "ask" decision
-to the pre-Jev-call target/preimage are structural or explicitly re-verified,
-not probabilistic. **Not claimed:** full descriptor-relative (`openat`-style)
-traversal — Bun/Node expose no public API for it — so a symlink substituted
-into an *intermediate* ancestor directory in the residual window between the
-harness's own `beforeToolCall` hook returning and the tool's `execute()`
-actually running (Pi's hook architecture provides no side-channel to close
-this further) is a real, unclosed TOCTOU window on this platform. Closing it
-fully requires a native addon or an external sandboxing executor; this
-release does not claim that guarantee, per the review remediation plan's
-explicit escape hatch (see `docs/plans/2026-09-22-review-remediation.md`, R2).
+A write whose target resolves *outside* the configured project root is a
+narrower, separately-scoped case: it already requires explicit interactive
+human approval every time (never auto-approved, unlike an in-root write), so
+the threat model it narrows is bounded by how long that approval takes to
+resolve, not by an unattended Jev decision. It falls back to a
+check-immediately-before-write + atomic same-directory rename (with the same
+preimage-digest check applied path-based), because no single trusted anchor
+exists for a full descriptor-relative walk from an arbitrary outside-root
+location without either breaking on ordinary system symlinks (macOS's `/tmp`
+→ `/private/tmp`, `/var` → `/private/var`) or reintroducing the exact gap the
+executor exists to close.
+
+**Supported guarantee (in-root writes, executor available):** a symlink
+substituted into any ancestor, or the target's content changed, at any point
+before this call — including while an earlier Jev gate call was still
+in flight, and including the window after that gate decision returns but
+before the tool's own `execute()` runs, which no amount of *rechecking
+inside the gate hook* can ever reach on its own — is rejected, not silently
+followed. This is real, kernel-enforced descriptor-relative traversal, not a
+second preflight check layered on top of ordinary path-based I/O.
+**Not claimed:** protection against a directory being replaced with a
+*different real directory* of the same name (as opposed to a symlink) in the
+sub-syscall gap between this executor's own successive `stat`-then-`open`
+calls for one ancestor — closing that specific, much narrower case would
+require the OS to expose atomic `O_NOFOLLOW`-verified-identity opens, which
+even `openat()` alone does not guarantee. **Not claimed either:** the
+outside-root fallback's guarantee is only as strong as its bounded
+check-then-write window, narrower than the in-root path by design (see
+above) — this is the documented, intentional scope boundary, not an
+oversight.
 
 ## Managed process termination
 
@@ -164,7 +194,7 @@ Two always-available tools recover a capture without rerunning the command:
 
 ```
 read_output({ id, stream?, startLine, lineCount, startByteInLine? })
-search_output({ id, stream?, pattern, limit, startLine? })
+search_output({ id, stream?, pattern, limit, startLine?, startCharInLine? })
 ```
 
 Responses carry their real source ranges (or, for a single line too large for
@@ -173,19 +203,30 @@ value) and completeness markers, and pass through the same bounded
 presentation and sanitize path as any other tool result — including hostile
 content in a late recovery page. Unknown ID, unknown stream, evicted artifact,
 capture truncation, and empty source are distinct outcomes — never a bare "no
-output". Both tools guarantee forward progress: `read_output` bounds a page
-to whole lines unless even the first requested line doesn't fit, in which
-case it falls back to UTF-8-byte-range pagination of that one line (never
-splitting a multi-byte character, including a complete one that happens to
-sit at the exact end of the page window); `search_output`'s `startLine`
-resumes a prior page — using its own delivered receipt, never a
-caller-assumed formula like "scanned-to plus one", which would skip matches
-already found within the scanned region but withheld by `limit` — and bounds
-its own delivered match list to the same review budget as everything else,
-with an explicit "page bounded" note distinct from "scan bounded by size"
-(the internal 1,000,000-character scan cap, reported via a `scannedLines`
-count that reflects what was actually scanned, not the full requested
-range).
+output". Both tools guarantee forward progress and never silently drop
+evidence they actually found:
+
+- `read_output` bounds a page to whole lines unless even the first requested
+  line doesn't fit, in which case it falls back to UTF-8-byte-range
+  pagination of that one line (never splitting a multi-byte character,
+  including a complete one that happens to sit at the exact end of the page
+  window).
+- `search_output`'s `startLine` resumes a prior page using its own delivered
+  receipt, never a caller-assumed formula like "scanned-to plus one" (which
+  would skip matches already found within the scanned region but withheld by
+  `limit`). It bounds its own delivered match list to the same review budget
+  as everything else, with an explicit "page bounded" note distinct from
+  "scan bounded by size" (the internal 1,000,000-character scan cap,
+  reported via a `scannedLines`/`scannedChars` pair that reflects what was
+  actually scanned, not the full requested range). A single match whose own
+  formatted line is too large to fit one page is never reported as "no
+  matches" — it is delivered as a bounded, explicitly truncated preview with
+  a pointer to recover the full line via `read_output`. A scan cut off
+  *mid-line* by the internal scan cap (a single line long enough that the
+  cap lands before its terminating newline) resumes *within* that same line
+  via `startCharInLine`, instead of jumping to the next line and
+  permanently skipping the unscanned remainder — including any match
+  sitting in it.
 
 ## Focus rollout
 
