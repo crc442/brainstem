@@ -632,6 +632,151 @@ describe("harness integration", () => {
     rmSync(outsideDir, { recursive: true, force: true });
   });
 
+  test("R2 regression (execution boundary): a parent directory swapped for a symlink AFTER beforeToolCall returns is still caught by the write tool's own execute(), not just a recheck", async () => {
+    dir = mkdtempSync(join(tmpdir(), "brainstem-harness-"));
+    const outsideDir = mkdtempSync(join(tmpdir(), "brainstem-harness-outside-"));
+    mkdirSync(join(dir, "sub"));
+    writeFileSync(join(dir, "sub", "file.txt"), "inside");
+    writeFileSync(join(outsideDir, "file.txt"), "outside");
+    const journalPath = join(dir, "journal.ndjson");
+
+    // No in-flight-during-Jev trickery here: beforeToolCall runs to
+    // completion and returns normally (auto-approved, gate never blocks).
+    // The swap happens strictly AFTER that — in the residual window no
+    // preflight recheck inside beforeToolCall can ever reach, since
+    // execute() is a separate call the harness does not get to intervene
+    // in again. Only the write tool's own execution boundary
+    // (writeFileVerified's descriptor-relative executor) can catch this.
+    const mock = mockSystemOne((_state, questions): Record<string, Answer> => {
+      if ("contains_agent_directive" in questions) {
+        return {
+          contains_agent_directive: noulAnswer(0.01),
+          tries_to_override: noulAnswer(0.01),
+          requests_dangerous_action: noulAnswer(0.01),
+          severity: scoreAnswer(0.0, 0.9),
+          satisfies_intent: noulAnswer(0.9),
+          result_quality: scoreAnswer(2.0, 0.9),
+          evidence_of_success: noulAnswer(0.9),
+          operational_failure: noulAnswer(0.9),
+        };
+      }
+      return {
+        destructive: scoreAnswer(0, 0.9),
+        touches_credentials: noulAnswer(0.01),
+        exfiltrates: noulAnswer(0.01),
+        on_task: noulAnswer(0.99),
+        disposition: choiceAnswer("auto_run", 0.99, { auto_run: 0.99, ask_user: 0.005, deny: 0.005 }),
+      };
+    });
+
+    const harness = createHarness({
+      systemOne: mock,
+      streamFn: scriptedStream([
+        assistantMessage(
+          [{ type: "toolCall", id: "tc1", name: "write", arguments: { path: "sub/file.txt", content: "escaped" } }],
+          "toolUse",
+        ),
+        assistantMessage([{ type: "text", text: "Done." }], "stop"),
+      ]),
+      model: { id: "m", api: "anthropic-messages" } as never,
+      trust: 0.3,
+      journalPath,
+      cwd: dir,
+      approvalHandler: async () => "approve_once",
+    });
+
+    const write = harness.agent.state.tools.find((t) => t.name === "write")!;
+    const originalExecute = write.execute.bind(write);
+    write.execute = async (id, params, signal, onUpdate) => {
+      // Simulate the attacker's window: the gate has already decided "auto"
+      // (beforeToolCall has returned) and Pi is about to call execute() —
+      // swap the directory right before that call actually runs.
+      rmSync(join(dir, "sub"), { recursive: true, force: true });
+      symlinkSync(outsideDir, join(dir, "sub"));
+      return originalExecute(id, params, signal, onUpdate);
+    };
+
+    await harness.prompt("update the file");
+
+    // The core property the review reproduction checks: the outside file
+    // must be byte-for-byte unchanged, not "escaped".
+    expect(readFileSync(join(outsideDir, "file.txt"), "utf8")).toBe("outside");
+    expect(harness.approvalsRequested()).toBe(0); // auto-approved — this is exactly the unattended path the plan is concerned with
+    const transcript = harness.agent.state.messages;
+    const writeResult = transcript.find(
+      (m) => m.role === "toolResult" && (m as { toolCallId?: string }).toolCallId === "tc1",
+    ) as { isError: boolean; content: { text: string }[] } | undefined;
+    expect(writeResult?.isError).toBe(true);
+    expect(writeResult?.content[0]?.text).toContain("symlink");
+
+    rmSync(outsideDir, { recursive: true, force: true });
+  });
+
+  test("R2/R3 regression (execution boundary): file content edited AFTER an auto-approved gate decision but BEFORE execute() runs is caught by the write's own preimage check, not just a recheck", async () => {
+    dir = mkdtempSync(join(tmpdir(), "brainstem-harness-"));
+    writeFileSync(join(dir, "config.json"), '{"port":3000}');
+    const journalPath = join(dir, "journal.ndjson");
+
+    const mock = mockSystemOne((_state, questions): Record<string, Answer> => {
+      if ("contains_agent_directive" in questions) {
+        return {
+          contains_agent_directive: noulAnswer(0.01),
+          tries_to_override: noulAnswer(0.01),
+          requests_dangerous_action: noulAnswer(0.01),
+          severity: scoreAnswer(0.0, 0.9),
+          satisfies_intent: noulAnswer(0.9),
+          result_quality: scoreAnswer(2.0, 0.9),
+          evidence_of_success: noulAnswer(0.9),
+          operational_failure: noulAnswer(0.9),
+        };
+      }
+      return {
+        destructive: scoreAnswer(0, 0.9),
+        touches_credentials: noulAnswer(0.01),
+        exfiltrates: noulAnswer(0.01),
+        on_task: noulAnswer(0.99),
+        disposition: choiceAnswer("auto_run", 0.99, { auto_run: 0.99, ask_user: 0.005, deny: 0.005 }),
+      };
+    });
+
+    const harness = createHarness({
+      systemOne: mock,
+      streamFn: scriptedStream([
+        assistantMessage(
+          [{ type: "toolCall", id: "tc1", name: "write", arguments: { path: "config.json", content: '{"port":8080}' } }],
+          "toolUse",
+        ),
+        assistantMessage([{ type: "text", text: "Done." }], "stop"),
+      ]),
+      model: { id: "m", api: "anthropic-messages" } as never,
+      trust: 0.3,
+      journalPath,
+      cwd: dir,
+      approvalHandler: async () => "approve_once",
+    });
+
+    const write = harness.agent.state.tools.find((t) => t.name === "write")!;
+    const originalExecute = write.execute.bind(write);
+    write.execute = async (id, params, signal, onUpdate) => {
+      // Same residual window as the symlink test above, but for a
+      // CONCURRENT CONTENT EDIT instead of a target substitution — the
+      // gate already decided "auto" against the ORIGINAL content.
+      writeFileSync(join(dir, "config.json"), '{"port":9999,"editedConcurrently":true}');
+      return originalExecute(id, params, signal, onUpdate);
+    };
+
+    await harness.prompt("bump the port");
+
+    // Must not have executed against the stale approved content.
+    expect(readFileSync(join(dir, "config.json"), "utf8")).toBe('{"port":9999,"editedConcurrently":true}');
+    const transcript = harness.agent.state.messages;
+    const writeResult = transcript.find(
+      (m) => m.role === "toolResult" && (m as { toolCallId?: string }).toolCallId === "tc1",
+    ) as { isError: boolean; content: { text: string }[] } | undefined;
+    expect(writeResult?.isError).toBe(true);
+    expect(writeResult?.content[0]?.text).toContain("changed since approval was requested");
+  });
+
   test("steer sees active capabilities and journals the model that actually served the request", async () => {
     dir = mkdtempSync(join(tmpdir(), "brainstem-harness-"));
     const journalPath = join(dir, "journal.ndjson");
