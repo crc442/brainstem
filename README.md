@@ -75,34 +75,45 @@ executed by a real descriptor-relative (`openat`-style) filesystem executor
 (`packages/cli/src/native/verified-write.py`, invoked as a subprocess from
 `packages/cli/src/paths.ts`), not by a path-based check followed by a
 separate path-based write. It opens a **trust anchor directory** with
-`O_NOFOLLOW` and verifies that anchor's own device+inode identity against
-what was captured at authorization time — not merely that the path string
-still resolves to *something* — then walks each remaining path component
-relative to the *previously verified parent directory's own file descriptor*,
-also with `O_NOFOLLOW`, and only ever writes and renames within that final
-verified directory's fd. A symlink substituted into any ancestor — including
-the anchor itself — or a *different real directory* swapped in under the
-anchor's own name, cannot redirect the write: the walk never re-resolves a
-path string from scratch, never follows a symlink it encounters, and never
-trusts an anchor whose identity has changed. The same verified fd chain also
-checks (when the harness supplies one) that the target's *current content*
-still matches a sha256 digest computed at authorization time, so a concurrent
-edit is rejected exactly like a concurrent symlink swap. An existing file's
-permission bits are preserved onto the replacement.
+`O_NOFOLLOW`, then walks each remaining path component — every intermediate
+directory, not just the anchor — relative to the *previously verified
+parent directory's own file descriptor*, also with `O_NOFOLLOW`, and only
+ever writes and renames within that final verified directory's fd. **Every
+component in that chain — the anchor, each intermediate directory, and the
+final file itself — has its device+inode identity verified on the
+descriptor the executor just opened for it**, against an expectation
+captured at authorization time, never against a later, separate path-based
+stat. A symlink substituted into any ancestor, or a *different real
+directory or file* swapped in under the same name anywhere in the chain
+(including the final file itself — a byte-for-byte identical replacement is
+still a different file and is rejected, not just a content mismatch),
+cannot redirect the write: identity is checked on the descriptor actually
+used, not re-derived from a path string. The same verified fd chain also
+checks the target's *current content* against a sha256 digest captured at
+authorization time, so a concurrent edit is rejected exactly like a
+concurrent identity swap. An existing file's permission bits are preserved
+onto the replacement.
 
 What actually gets executed is bound by an **immutable, single-use
-authorization permit** (`WritePermit`, built by `prepareWritePermit` at
-authorization time — before any await a Jev judgment or a human approval
-wait could let an attacker act within — and consumed exactly once by
-`executeWritePermit`). The permit fixes the target's canonical identity, the
-content's digest, the anchor's device+inode, and the preimage digest; the
-write tool's own `execute()` refuses outright — never falls back to an
-unverified write — if the toolCallId it's given has no permit (missing,
-already consumed, or the write never went through the harness's approval
-flow), if the requested target no longer matches what the permit authorized,
-or if the requested content no longer matches it either. Approving one write
-never authorizes a different target, different content, or a replayed
-permit.
+authorization permit** (`WritePermit`, built by `prepareWritePermit`). This
+permit is captured exactly once, **before any await** — before the Jev gate
+judgment and before a human approval wait, not merely "early" in the
+handler — because building it any later, even "right after the gate/approval
+decision returns," would silently recapture whatever identity the
+filesystem has AT THAT LATER MOMENT and call it authorized, which is not
+authorization at all. (An earlier version of this fix made exactly that
+mistake — building the permit after the gate decision resolved — and an
+independent audit caught it: the "before any await" property has to hold
+for the call site, not just be asserted in a comment.) The permit fixes the
+target's canonical identity, the content's digest, and every directory and
+file identity in the chain down to the target; `executeWritePermit`
+consumes it exactly once, and the write tool's own `execute()` refuses
+outright — never falls back to an unverified write — if the toolCallId it's
+given has no permit (missing, already consumed, or the write never went
+through the harness's approval flow), if the requested target no longer
+matches what the permit authorized, or if the requested content no longer
+matches it either. Approving one write never authorizes a different target,
+different content, or a replayed permit.
 
 Neither Bun nor Node expose `openat`, so this executor is a `python3` (or
 `python`) subprocess — verified once per process to support the required
@@ -128,26 +139,24 @@ different-real-directory swap of that anchor — even one performed strictly
 after a human approved the write — is caught the same way a root swap is.
 
 **Supported guarantee:** for both in-root and approved outside-root writes,
-a symlink (or a different real directory) substituted for the trust anchor
-or any intermediate ancestor, the target's content changed, or the tool
-call's own target/content mutated, at any point before this call —
-including while an earlier Jev gate call or human approval wait was still in
-flight, and including the window after that decision returns but before the
-tool's own `execute()` runs, which no amount of *rechecking inside the gate
-hook* can ever reach on its own — is rejected, not silently followed. This
-is real, kernel-enforced descriptor-relative traversal bound to an
-authorization permit, not a second preflight check layered on top of
-ordinary path-based I/O. **Not claimed:** protection against an ancestor
-*above* the anchor (for an outside-root target only — the in-root anchor is
-the project root itself, with nothing above it in scope) being swapped after
-that anchor was already chosen; and protection against a directory being
-replaced with a *different real directory* of the same name in the
-sub-syscall gap between this executor's own successive `stat`-then-`open`
-calls for one already-descended-into intermediate ancestor (as opposed to
-the anchor, whose identity IS verified) — closing that specific, much
-narrower residual case would require the OS to expose atomic
-`O_NOFOLLOW`-verified-identity opens for every path segment, which even
-`openat()` alone does not guarantee.
+a symlink or a different real directory/file substituted for the trust
+anchor, any intermediate directory in the chain, or the final target
+itself — or the target's content changed, or the tool call's own
+target/content mutated — at any point between authorization and this call,
+however long that window is (an in-flight Jev gate call, a human approval
+wait, or the residual gap after that decision returns but before the tool's
+own `execute()` runs, which no amount of *rechecking inside the gate hook*
+can ever reach on its own) is rejected, not silently followed. Equal file
+content is never treated as equal target identity, for a directory or for
+the final file. This is real, kernel-enforced descriptor-relative traversal
+bound to an authorization permit captured before the window it protects
+begins, not a second preflight check layered on top of ordinary path-based
+I/O. **Not claimed:** protection against an ancestor *above* the chosen
+anchor (relevant only to an outside-root target — the in-root anchor is the
+project root itself, with nothing above it in scope) being swapped after
+that anchor was already selected; and, as with any userspace security
+boundary, protection against compromise of the Python interpreter or the
+OS/kernel this executor itself depends on.
 
 ## Managed process termination
 
