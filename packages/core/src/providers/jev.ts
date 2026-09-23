@@ -32,7 +32,7 @@ function mapAnswers(raw: Record<string, unknown>): Record<string, Answer> {
   return answers;
 }
 
-export function jevSystemOne(client: TypeSafeClient, model = DEFAULT_JEV_MODEL): SystemOne {
+export function jevSystemOne(client: TypeSafeClient, model: string = DEFAULT_JEV_MODEL): SystemOne {
   return {
     name: `jev:${model}`,
     capabilities: { confidence: "provider-reported", usage: true, cancellation: "cooperative" },

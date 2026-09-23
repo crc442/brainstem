@@ -2,7 +2,13 @@ import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
 
 export default defineConfig({
-  resolve: { alias: Object.fromEntries(["core", "reflexes", "pi-adapter"].map((name) => [`@brainstem/${name}`, fileURLToPath(new URL(`./packages/${name}/src/index.ts`, import.meta.url))])) },
+  resolve: {
+    alias: {
+      "@brainstem/core": fileURLToPath(new URL("./packages/core/src/index.ts", import.meta.url)),
+      "@brainstem/pi-adapter": fileURLToPath(new URL("./packages/pi-adapter/src/index.ts", import.meta.url)),
+      "@brainstem/reflexes": fileURLToPath(new URL("./packages/reflexes/src/index.ts", import.meta.url)),
+    },
+  },
   test: {
     include: ["packages/*/test/**/*.test.ts"],
     environment: "node",
