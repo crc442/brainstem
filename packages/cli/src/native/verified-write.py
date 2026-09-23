@@ -2,31 +2,41 @@
 """
 Scoped, isolated filesystem executor for R2/R3 (see
 docs/plans/2026-09-22-review-remediation.md). This is the ONLY thing that
-actually writes a file under a managed write: every intermediate path
-component is opened relative to the PREVIOUSLY VERIFIED parent directory's
-own file descriptor, using O_NOFOLLOW, so a symlink substituted into any
-ancestor directory AT ANY POINT before this process starts (or, for an
-already-open fd, after a component has been verified and descended into)
-cannot redirect the write to a different, attacker-chosen location.
-
-The TRUST ANCHOR itself — the directory every other component is walked
-relative to — is opened with O_NOFOLLOW too, and its device+inode identity
-is verified against what the caller captured at AUTHORIZATION time, before
-anything else happens. This closes the gap a plain "open the anchor path
-string" cannot: an anchor whose directory entry was replaced (by a symlink,
-OR by a different real directory with the same name) strictly AFTER
-authorization and strictly BEFORE this process runs is caught here, not
-assumed safe just because the string still resolves to *something*.
+actually writes a file under a managed write: every path component —
+including the trust anchor itself, AND every intermediate directory between
+it and the final file — is opened relative to the PREVIOUSLY VERIFIED
+parent directory's own file descriptor, using O_NOFOLLOW, and its identity
+(device+inode) is checked on that SAME opened descriptor against an
+expectation the caller captured at AUTHORIZATION time — never against a
+separate, later, re-racable path-based stat. A symlink OR a different real
+directory substituted for the anchor, or for any intermediate ancestor, at
+ANY point between authorization and this process running — however long
+that window is — cannot redirect the write, because identity is verified on
+the descriptor actually used to descend, not re-derived from a path string.
 
 This is deliberately narrow: it does exactly one thing (verify a path
-component-by-component via descriptor-relative syscalls, then atomically
-write and rename within the final verified directory's fd) and nothing
-else. It is invoked once per managed write by packages/cli/src/paths.ts,
-which is the only caller and is responsible for validating that every
-argv component is a single path segment before invoking this script.
+component-by-component via descriptor-relative syscalls, checking identity
+on each opened descriptor, then atomically write and rename within the
+final verified directory's fd) and nothing else. It is invoked once per
+managed write by packages/cli/src/paths.ts, which is the only caller and is
+responsible for (a) capturing every expected identity BEFORE any Jev/human-
+approval wait, never after, and (b) validating that every argv path
+component is a single safe path segment before invoking this script.
 
 Protocol:
-  argv: <anchor> <expected-anchor-dev> <expected-anchor-ino> <expected-preimage-digest-or-"-"> [<intermediate-component> ...] <final-component>
+  argv:
+    [0] anchor
+    [1] expected-anchor-dev
+    [2] expected-anchor-ino
+    [3] expected-preimage-digest-or-"-"
+    [4] n-intermediate (count of intermediate directory components)
+    for i in 0..n-intermediate-1:
+      [5+3i]   precondition kind: "E" (expected to exist) or "M" (expected
+                missing, to be created)
+      [5+3i+1] expected dev ("-" when kind is "M")
+      [5+3i+2] expected ino ("-" when kind is "M")
+    [5+3*n .. 5+3*n+n-1]  intermediate component NAMES, in descent order
+    [last] final component name
   stdin: the raw bytes to write (read fully before any filesystem action)
   stdout on success: "OK <bytesWritten>"
   stderr + nonzero exit on failure: "<REASON_CODE>:<detail>"
@@ -34,28 +44,35 @@ Protocol:
 <anchor> is the caller's TRUST ANCHOR directory — the project root for an
 in-root write, or the deepest existing real ancestor directory of an
 approved outside-root target — captured and canonicalized by the caller at
-AUTHORIZATION time, never re-derived here. <expected-anchor-dev>/<ino> are
-that anchor's device and inode number at that same moment (decimal,
-arbitrary precision), verified against a fresh O_NOFOLLOW-opened fstat of
-the SAME path string immediately before anything else — this is what
-detects the anchor itself having been replaced (by a symlink, or by a
-different real directory) in the window between authorization and this
-process running, which a plain path-based re-open can never distinguish
-from "nothing changed."
+AUTHORIZATION time, never re-derived here. Its identity is verified exactly
+like every intermediate component's below.
+
+Each intermediate component carries its own precondition, captured by the
+caller at the SAME authorization moment as the anchor:
+  - "E" (exists): the component must open successfully with O_NOFOLLOW and
+    its OPENED DESCRIPTOR's device+inode must match exactly. A component
+    that was a real, existing directory at authorization time and is a
+    DIFFERENT real directory (or a symlink, or missing) now is rejected —
+    equal content at that path is never treated as equal identity.
+  - "M" (missing): the component must still not exist right before it is
+    created (an attacker pre-creating it between authorization and
+    execution is not silently accepted as "the directory this call itself
+    made"), then is created and descended into.
 
 expected-preimage-digest is either "-" (skip the check), "absent" (the
 caller expects no file exists there yet), or a lowercase hex sha256 of the
 expected CURRENT content. The check happens inside the SAME verified fd
 chain, immediately before the write — never a separate, earlier, re-racable
-step — so a concurrent edit AND a concurrent symlink swap are both bound to
-execution by the same boundary.
+step — so a concurrent edit AND a concurrent symlink/directory swap are both
+bound to execution by the same boundary.
 
 Exit codes: 2 anchor open or identity check failed, 3 an intermediate
-component is a symlink or non-directory, 4 the final component is an
-existing symlink, 5 the final component exists but is not a regular file,
-6 an argv component is not a single safe path segment, 7 unexpected OS
-error during the write/rename itself, 8 the existing content's digest did
-not match expected-preimage-digest, 9 malformed dev/ino argv values.
+component's open, precondition, or identity check failed, 4 the final
+component is an existing symlink, 5 the final component exists but is not a
+regular file, 6 an argv path component is not a single safe path segment,
+7 unexpected OS error during the write/rename itself, 8 the existing
+content's digest did not match expected-preimage-digest, 9 malformed
+numeric argv values.
 
 Requires a platform where Python's `os` module supports dir_fd for open,
 mkdir, rename, and stat, and follow_symlinks=False for stat (verified by
@@ -85,6 +102,26 @@ def probe():
     sys.exit(0 if ok else 1)
 
 
+def parse_int(value, code, label):
+    try:
+        return int(value)
+    except ValueError:
+        fail(code, "BAD_NUMERIC_ARG:%s:%s" % (label, value))
+
+
+def open_dir_nofollow(name, dir_fd, fail_code, fail_label):
+    """Opens `name` relative to `dir_fd` with O_NOFOLLOW and returns the new
+    fd, or fails with `fail_code`. O_NOFOLLOW alone rejects a symlink at
+    open time; the caller still must fstat the result to check identity and
+    that it is actually a directory (O_DIRECTORY does the latter here too,
+    but callers additionally verify on the fstat'd result for one uniform
+    identity-check code path)."""
+    try:
+        return os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=dir_fd)
+    except OSError as e:
+        fail(fail_code, "%s:%s:%s" % (fail_label, name, e))
+
+
 def main():
     if len(sys.argv) >= 2 and sys.argv[1] == "--probe":
         probe()
@@ -92,18 +129,33 @@ def main():
 
     args = sys.argv[1:]
     if len(args) < 5:
-        fail(1, "USAGE: anchor expected_dev expected_ino expected_digest_or_dash [components...] final_name  (content on stdin)")
+        fail(1, "USAGE: anchor expected_dev expected_ino expected_digest_or_dash n_intermediate [kind dev ino]... [names]... final_name  (content on stdin)")
     anchor = args[0]
-    try:
-        expected_dev = int(args[1])
-        expected_ino = int(args[2])
-    except ValueError:
-        fail(9, "BAD_ANCHOR_IDENTITY:non-integer dev/ino argument")
+    expected_anchor_dev = parse_int(args[1], 9, "anchor_dev")
+    expected_anchor_ino = parse_int(args[2], 9, "anchor_ino")
     expected_digest = args[3]
-    final_name = args[-1]
-    components = args[4:-1]
+    n_intermediate = parse_int(args[4], 9, "n_intermediate")
+    if n_intermediate < 0:
+        fail(9, "BAD_NUMERIC_ARG:n_intermediate:%d" % n_intermediate)
 
-    for comp in components + [final_name]:
+    idx = 5
+    preconditions = []
+    for _ in range(n_intermediate):
+        if idx + 3 > len(args):
+            fail(1, "USAGE: truncated precondition list")
+        kind, dev_s, ino_s = args[idx], args[idx + 1], args[idx + 2]
+        if kind not in ("E", "M"):
+            fail(9, "BAD_PRECONDITION_KIND:%s" % kind)
+        preconditions.append((kind, dev_s, ino_s))
+        idx += 3
+
+    names_start = idx
+    if names_start + n_intermediate + 1 != len(args):
+        fail(1, "USAGE: component name count does not match n_intermediate")
+    intermediate_names = args[names_start:names_start + n_intermediate]
+    final_name = args[-1]
+
+    for comp in intermediate_names + [final_name]:
         if not is_safe_component(comp):
             fail(6, "INVALID_COMPONENT:%s" % comp)
 
@@ -115,33 +167,58 @@ def main():
         fail(2, "ANCHOR_OPEN_FAILED:%s" % e)
 
     try:
+        # Identity is verified on the descriptor actually opened above, not
+        # a separate path-based stat of `anchor` — this is what distinguishes
+        # "the same directory that was here at authorization time" from "a
+        # different real directory an attacker swapped in under the same
+        # name", which a plain re-open-and-trust cannot.
         anchor_st = os.fstat(dir_fd)
-        if anchor_st.st_dev != expected_dev or anchor_st.st_ino != expected_ino:
+        if anchor_st.st_dev != expected_anchor_dev or anchor_st.st_ino != expected_anchor_ino:
             fail(
                 2,
                 "ANCHOR_IDENTITY_MISMATCH:expected dev=%s ino=%s but found dev=%s ino=%s"
-                % (expected_dev, expected_ino, anchor_st.st_dev, anchor_st.st_ino),
+                % (expected_anchor_dev, expected_anchor_ino, anchor_st.st_dev, anchor_st.st_ino),
             )
 
-        for comp in components:
-            try:
-                st = os.stat(comp, dir_fd=dir_fd, follow_symlinks=False)
-            except FileNotFoundError:
-                # Does not exist yet — create it as a real directory, then
-                # verify what we just created before trusting it (a
-                # concurrent actor could in principle have raced us between
-                # mkdir and stat; re-stat closes that, and the subsequent
-                # O_NOFOLLOW open is what actually enforces it atomically).
+        for comp, (kind, dev_s, ino_s) in zip(intermediate_names, preconditions):
+            if kind == "E":
+                new_fd = open_dir_nofollow(comp, dir_fd, 3, "COMPONENT_OPEN_FAILED")
+                st = os.fstat(new_fd)
+                if not stat.S_ISDIR(st.st_mode):
+                    os.close(new_fd)
+                    fail(3, "SYMLINK_OR_NON_DIR:%s" % comp)
+                expected_dev = parse_int(dev_s, 9, "component_dev")
+                expected_ino = parse_int(ino_s, 9, "component_ino")
+                if st.st_dev != expected_dev or st.st_ino != expected_ino:
+                    os.close(new_fd)
+                    fail(
+                        3,
+                        "COMPONENT_IDENTITY_MISMATCH:%s expected dev=%s ino=%s but found dev=%s ino=%s"
+                        % (comp, expected_dev, expected_ino, st.st_dev, st.st_ino),
+                    )
+                os.close(dir_fd)
+                dir_fd = new_fd
+            else:  # "M": expected missing at authorization time
+                # Verify it is STILL missing before creating it — an
+                # attacker pre-creating this exact path between
+                # authorization and execution must not be silently accepted
+                # as "the directory this call itself made".
+                try:
+                    os.stat(comp, dir_fd=dir_fd, follow_symlinks=False)
+                    fail(3, "COMPONENT_UNEXPECTEDLY_EXISTS:%s" % comp)
+                except FileNotFoundError:
+                    pass
                 try:
                     os.mkdir(comp, dir_fd=dir_fd)
                 except FileExistsError:
-                    pass
-                st = os.stat(comp, dir_fd=dir_fd, follow_symlinks=False)
-            if stat.S_ISLNK(st.st_mode) or not stat.S_ISDIR(st.st_mode):
-                fail(3, "SYMLINK_OR_NON_DIR:%s" % comp)
-            new_fd = os.open(comp, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=dir_fd)
-            os.close(dir_fd)
-            dir_fd = new_fd
+                    fail(3, "COMPONENT_UNEXPECTEDLY_EXISTS:%s" % comp)
+                new_fd = open_dir_nofollow(comp, dir_fd, 3, "COMPONENT_OPEN_FAILED")
+                st = os.fstat(new_fd)
+                if not stat.S_ISDIR(st.st_mode):
+                    os.close(new_fd)
+                    fail(3, "SYMLINK_OR_NON_DIR:%s" % comp)
+                os.close(dir_fd)
+                dir_fd = new_fd
 
         mode = None
         existed = False
