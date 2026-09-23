@@ -1,19 +1,8 @@
 import { afterEach, describe, expect, test } from "vitest";
-import { chmodSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { contentHash } from "@brainstem/core";
-import {
-  ABSENT_PREIMAGE_DIGEST,
-  checkWriteTarget,
-  executeWritePermit,
-  isInside,
-  prepareWritePermit,
-  resolveParentForWrite,
-  resolvePath,
-  writeCapability,
-  writeFileVerified,
-} from "../src/paths";
+import { isInside, resolveParentForWrite, resolvePath, writeCapability, writeFileVerified, WRITE_UNAVAILABLE_REASON } from "../src/paths";
 
 let dir: string;
 afterEach(() => {
@@ -80,333 +69,38 @@ describe("resolveParentForWrite", () => {
   });
 });
 
-describe("R2: checkWriteTarget / writeFileVerified — bind the check to the actual write", () => {
-  test("a final symlink pointing outside the root is rejected, not followed", () => {
-    dir = mkdtempSync(join(tmpdir(), "brainstem-paths-r2-"));
-    const outsideDir = mkdtempSync(join(tmpdir(), "brainstem-paths-r2-outside-"));
-    const outsideFile = join(outsideDir, "secret.txt");
-    writeFileSync(outsideFile, "original outside content");
-    const link = join(dir, "link-to-outside.txt");
-    symlinkSync(outsideFile, link);
-
-    const check = checkWriteTarget(dir, "link-to-outside.txt");
-    expect(check.ok).toBe(false);
-    expect(check.reason).toContain("symlink");
-
-    const result = writeFileVerified(dir, "link-to-outside.txt", "attacker-controlled content");
-    expect(result.ok).toBe(false);
-    // The reproduction from the review: a link inside the repo to an outside
-    // file leaves the outside file unchanged and cannot auto-run.
-    expect(readFileSync(outsideFile, "utf8")).toBe("original outside content");
-
-    rmSync(outsideDir, { recursive: true, force: true });
+describe("R2/R3: unavailable managed writes have no filesystem effects", () => {
+  test("capability is unavailable even when descriptor-relative syscalls are supported", () => {
+    expect(writeCapability()).toBe("unavailable");
   });
 
-  test("a dangling symlink is rejected, not silently created through", () => {
-    dir = mkdtempSync(join(tmpdir(), "brainstem-paths-r2-"));
-    const link = join(dir, "dangling.txt");
-    symlinkSync(join(dir, "does-not-exist-target.txt"), link);
-
-    const result = writeFileVerified(dir, "dangling.txt", "content");
-    expect(result.ok).toBe(false);
-    expect(existsSync(join(dir, "does-not-exist-target.txt"))).toBe(false);
-  });
-
-  test("a symlinked PARENT directory inside the root is followed via realpath, and containment is still enforced", () => {
-    dir = mkdtempSync(join(tmpdir(), "brainstem-paths-r2-"));
-    const outsideDir = mkdtempSync(join(tmpdir(), "brainstem-paths-r2-outside-"));
-    const parentLink = join(dir, "linked-dir");
-    symlinkSync(outsideDir, parentLink);
-
-    // Writing THROUGH a symlinked parent directory is allowed (the parent
-    // chain is canonicalized via realpath) but the realpath'd destination is
-    // OUTSIDE the configured root, so containment must catch it — this
-    // module only rejects a symlinked FINAL component outright; outside-root
-    // containment for a symlinked parent is the caller's (harness gate's)
-    // responsibility, verified here at the resolution layer.
-    const check = checkWriteTarget(dir, "linked-dir/new-file.txt");
-    expect(check.ok).toBe(true);
-    expect(isInside(dir, check.resolvedTarget)).toBe(false);
-    expect(isInside(outsideDir, check.resolvedTarget)).toBe(true);
-
-    rmSync(outsideDir, { recursive: true, force: true });
-  });
-
-  test("writing to a hard-linked destination does not modify the other link's inode (no in-place truncation)", () => {
-    dir = mkdtempSync(join(tmpdir(), "brainstem-paths-r2-"));
-    const target = join(dir, "target.txt");
-    const other = join(dir, "other-link.txt");
-    writeFileSync(target, "shared original content");
-    linkSync(target, other);
-    expect(statSync(target).ino).toBe(statSync(other).ino);
-
-    const result = writeFileVerified(dir, "target.txt", "new content via target");
-    expect(result.ok).toBe(true);
-    expect(readFileSync(target, "utf8")).toBe("new content via target");
-    // The other hardlink must still see the ORIGINAL content: a rename-based
-    // replace creates a new inode rather than truncating the shared one.
-    expect(readFileSync(other, "utf8")).toBe("shared original content");
-  });
-
-  test("an existing non-regular-file occupant (a directory) is rejected rather than silently replaced", () => {
-    dir = mkdtempSync(join(tmpdir(), "brainstem-paths-r2-"));
-    mkdirSync(join(dir, "a-directory"));
-    const result = writeFileVerified(dir, "a-directory", "content");
-    expect(result.ok).toBe(false);
-    expect(statSync(join(dir, "a-directory")).isDirectory()).toBe(true);
-  });
-
-  test("an ordinary write to a new file inside the root succeeds and is atomic (no leftover temp files)", () => {
-    dir = mkdtempSync(join(tmpdir(), "brainstem-paths-r2-"));
-    const result = writeFileVerified(dir, "new/nested/file.txt", "hello");
-    expect(result.ok).toBe(true);
-    expect(readFileSync(join(dir, "new", "nested", "file.txt"), "utf8")).toBe("hello");
-  });
-
-  test("P2/R2 regression: an atomic replacement preserves the existing file's permission bits, not the process default", () => {
-    dir = mkdtempSync(join(tmpdir(), "brainstem-paths-r2-"));
-    const privatePath = join(dir, "private.txt");
-    writeFileSync(privatePath, "before");
-    chmodSync(privatePath, 0o600);
-    const executable = join(dir, "script.sh");
-    writeFileSync(executable, "before");
-    chmodSync(executable, 0o755);
-
-    expect(writeFileVerified(dir, "private.txt", "after").ok).toBe(true);
-    expect(writeFileVerified(dir, "script.sh", "after").ok).toBe(true);
-
-    expect(statSync(privatePath).mode & 0o777).toBe(0o600);
-    expect(statSync(executable).mode & 0o777).toBe(0o755);
-    expect(readFileSync(privatePath, "utf8")).toBe("after");
-    expect(readFileSync(executable, "utf8")).toBe("after");
-  });
-
-  test("P2/R2: a brand-new file gets the process default mode, not a preserved one (nothing existed to preserve)", () => {
-    dir = mkdtempSync(join(tmpdir(), "brainstem-paths-r2-"));
-    const result = writeFileVerified(dir, "new.txt", "content");
-    expect(result.ok).toBe(true);
-    // No prior file existed, so this is just documenting there's no crash
-    // and a real (nonzero) mode is set — not asserting a specific umask.
-    expect(statSync(join(dir, "new.txt")).mode & 0o777).toBeGreaterThan(0);
-  });
-
-  test("a sibling-prefix path is not treated as inside the root", () => {
-    dir = mkdtempSync(join(tmpdir(), "brainstem-paths-r2-"));
-    const sibling = `${dir}-sibling`;
-    mkdirSync(sibling);
-    const check = checkWriteTarget(dir, join("..", `${dir.split("/").pop()}-sibling`, "file.txt"));
-    expect(isInside(dir, check.resolvedTarget)).toBe(false);
-    rmSync(sibling, { recursive: true, force: true });
-  });
-});
-
-describe("R2: descriptor-relative write executor — capability, execution boundary, and preimage binding", () => {
-  test("writeCapability reports descriptor-relative on this platform (python3 with dir_fd support present)", () => {
-    expect(writeCapability()).toBe("descriptor-relative");
-  });
-
-  test("writeCapability reports unavailable when no working interpreter is found, via a genuinely failing probe", () => {
-    expect(writeCapability({ pythonBinCandidates: ["definitely-not-a-real-interpreter-xyz"] })).toBe("unavailable");
-  });
-
-  test("in-root managed writes are explicitly REFUSED (not silently downgraded) when the executor is unavailable", () => {
-    dir = mkdtempSync(join(tmpdir(), "brainstem-paths-r2-"));
-    const result = writeFileVerified(dir, "file.txt", "content", {
-      pythonBinCandidates: ["definitely-not-a-real-interpreter-xyz"],
-    });
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.reason).toContain("unavailable");
-      expect(result.reason).toContain("refusing to write");
-    }
-    expect(existsSync(join(dir, "file.txt"))).toBe(false);
-  });
-
-  test("R2 regression (execution boundary, second-pass reproduction): a parent directory swapped for a symlink AFTER authorization is caught by writeFileVerified itself, not a preflight check", () => {
-    dir = mkdtempSync(join(tmpdir(), "brainstem-paths-r2-"));
-    const outsideDir = mkdtempSync(join(tmpdir(), "brainstem-paths-r2-outside-"));
-    mkdirSync(join(dir, "sub"));
-    writeFileSync(join(dir, "sub", "file.txt"), "inside");
-    writeFileSync(join(outsideDir, "file.txt"), "outside");
-
-    // Simulate: an earlier checkWriteTarget/gate call already resolved and
-    // "authorized" sub/file.txt (not modeled explicitly here — the point is
-    // that NO check happens between this line and the write below, mirroring
-    // the reproduction's beforeToolCall-then-swap-then-execute sequence).
-    renameSync(join(dir, "sub"), join(dir, "sub-original"));
-    symlinkSync(outsideDir, join(dir, "sub"));
-
-    const result = writeFileVerified(dir, "sub/file.txt", "escaped");
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.reason).toContain("symlink");
-    expect(readFileSync(join(outsideDir, "file.txt"), "utf8")).toBe("outside");
-
-    rmSync(outsideDir, { recursive: true, force: true });
-  });
-
-  test("preimage binding: a matching expectedPreimageDigest allows the write", () => {
-    dir = mkdtempSync(join(tmpdir(), "brainstem-paths-r2-"));
-    writeFileSync(join(dir, "f.txt"), "original");
-    const result = writeFileVerified(dir, "f.txt", "new content", { expectedPreimageDigest: contentHash("original") });
-    expect(result.ok).toBe(true);
-    expect(readFileSync(join(dir, "f.txt"), "utf8")).toBe("new content");
-  });
-
-  test("preimage binding regression: content edited AFTER authorization but before this call is caught, not overwritten", () => {
-    dir = mkdtempSync(join(tmpdir(), "brainstem-paths-r2-"));
-    writeFileSync(join(dir, "g.txt"), "original");
-    const authorizedDigest = contentHash("original");
-    // Concurrent edit happens strictly between "authorization" (computing
-    // authorizedDigest above) and the write call below.
-    writeFileSync(join(dir, "g.txt"), "concurrently edited");
-
-    const result = writeFileVerified(dir, "g.txt", "attacker or stale content", { expectedPreimageDigest: authorizedDigest });
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.reason).toContain("changed since approval was requested");
-    expect(readFileSync(join(dir, "g.txt"), "utf8")).toBe("concurrently edited");
-  });
-
-  test("preimage binding: ABSENT_PREIMAGE_DIGEST allows creating a genuinely new file, and rejects if one appeared concurrently", () => {
-    dir = mkdtempSync(join(tmpdir(), "brainstem-paths-r2-"));
-    const created = writeFileVerified(dir, "new.txt", "content", { expectedPreimageDigest: ABSENT_PREIMAGE_DIGEST });
-    expect(created.ok).toBe(true);
-
-    writeFileSync(join(dir, "surprise.txt"), "appeared concurrently");
-    const rejected = writeFileVerified(dir, "surprise.txt", "attacker content", {
-      expectedPreimageDigest: ABSENT_PREIMAGE_DIGEST,
-    });
-    expect(rejected.ok).toBe(false);
-    expect(readFileSync(join(dir, "surprise.txt"), "utf8")).toBe("appeared concurrently");
-  });
-
-  test("R2/R3 regression (equivalent gap, fourth pass audit): a byte-identical replacement file (same content, different inode) is rejected — equal content is never treated as equal identity", () => {
-    dir = mkdtempSync(join(tmpdir(), "brainstem-paths-r2-"));
-    writeFileSync(join(dir, "file.txt"), "original");
-
-    const prepared = prepareWritePermit(dir, "file.txt", "new content", contentHash("original"));
-    if (!prepared.ok) throw new Error(`setup failed: ${prepared.reason}`);
-    expect(prepared.permit.finalIdentity.kind).toBe("exists");
-
-    // Swap for a DIFFERENT file object with the SAME content — the preimage
-    // digest alone would pass; only identity binding catches this.
-    rmSync(join(dir, "file.txt"), { force: true });
-    writeFileSync(join(dir, "file.txt"), "original");
-
-    const result = executeWritePermit(prepared.permit, "new content");
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.reason).toContain("changed since authorization");
-    expect(readFileSync(join(dir, "file.txt"), "utf8")).toBe("original");
-  });
-
-  test("the descriptor-relative executor also preserves permissions and rejects a dangling final symlink", () => {
-    dir = mkdtempSync(join(tmpdir(), "brainstem-paths-r2-"));
-    const priv = join(dir, "priv.txt");
-    writeFileSync(priv, "before");
-    chmodSync(priv, 0o600);
-    expect(writeFileVerified(dir, "priv.txt", "after").ok).toBe(true);
-    expect(statSync(priv).mode & 0o777).toBe(0o600);
-
-    symlinkSync(join(dir, "does-not-exist"), join(dir, "dangling.txt"));
-    const result = writeFileVerified(dir, "dangling.txt", "content");
-    expect(result.ok).toBe(false);
-    expect(existsSync(join(dir, "does-not-exist"))).toBe(false);
-  });
-
-  test("new intermediate directories are created safely through the executor", () => {
-    dir = mkdtempSync(join(tmpdir(), "brainstem-paths-r2-"));
-    const result = writeFileVerified(dir, "a/b/c/leaf.txt", "héllo 🎉");
-    expect(result.ok).toBe(true);
-    expect(readFileSync(join(dir, "a", "b", "c", "leaf.txt"), "utf8")).toBe("héllo 🎉");
-  });
-
-  test("an outside-root write is executed through the SAME unified descriptor-relative executor, anchored to the approved target's own deepest existing parent", () => {
-    dir = mkdtempSync(join(tmpdir(), "brainstem-paths-r2-"));
-    const outsideDir = mkdtempSync(join(tmpdir(), "brainstem-paths-r2-outside2-"));
-    const result = writeFileVerified(dir, join(outsideDir, "file.txt"), "outside write");
-    expect(result.ok).toBe(true);
-    expect(readFileSync(join(outsideDir, "file.txt"), "utf8")).toBe("outside write");
-    rmSync(outsideDir, { recursive: true, force: true });
-  });
-
-  test("outside-root managed writes are also explicitly REFUSED (not degraded to an unverified path) when the executor is unavailable", () => {
-    dir = mkdtempSync(join(tmpdir(), "brainstem-paths-r2-"));
-    const outsideDir = mkdtempSync(join(tmpdir(), "brainstem-paths-r2-outside3-"));
-    const result = writeFileVerified(dir, join(outsideDir, "file.txt"), "content", {
-      pythonBinCandidates: ["definitely-not-a-real-interpreter-xyz"],
-    });
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.reason).toContain("unavailable");
-      expect(result.reason).toContain("refusing to write");
-    }
-    expect(existsSync(join(outsideDir, "file.txt"))).toBe(false);
-    rmSync(outsideDir, { recursive: true, force: true });
-  });
-
-  test("R2 regression (third-pass, root_symlink): the PROJECT ROOT ITSELF swapped for a symlink AFTER a permit was prepared is caught at execution, not just an intermediate ancestor", () => {
-    dir = mkdtempSync(join(tmpdir(), "brainstem-paths-r2-"));
-    const outsideDir = mkdtempSync(join(tmpdir(), "brainstem-paths-r2-outside-"));
-    writeFileSync(join(dir, "file.txt"), "inside");
-    writeFileSync(join(outsideDir, "file.txt"), "outside");
-
-    // Authorization happens FIRST, against the real root — prepareWritePermit
-    // captures the root's own device+inode identity here, before any swap.
-    const prepared = prepareWritePermit(dir, "file.txt", "escaped", ABSENT_PREIMAGE_DIGEST);
-    if (!prepared.ok) throw new Error(`setup failed: ${prepared.reason}`);
-
-    // The root itself — not merely an intermediate ancestor — is removed and
-    // replaced with a symlink to an outside directory containing a
-    // same-named file, strictly AFTER authorization.
-    rmSync(dir, { recursive: true, force: true });
-    symlinkSync(outsideDir, dir);
-
-    const result = executeWritePermit(prepared.permit, "escaped");
-    expect(result.ok).toBe(false);
-    expect(readFileSync(join(outsideDir, "file.txt"), "utf8")).toBe("outside");
-
-    rmSync(outsideDir, { recursive: true, force: true });
-    dir = ""; // already replaced with a symlink above; nothing left for afterEach to remove
-  });
-
-  test("R2 regression (third-pass, root_symlink): a real directory (not a symlink) swapped in under the root's own name is also caught, via anchor identity, not just symlink rejection", () => {
-    dir = mkdtempSync(join(tmpdir(), "brainstem-paths-r2-"));
-    writeFileSync(join(dir, "file.txt"), "inside");
-
-    const prepared = prepareWritePermit(dir, "file.txt", "escaped", ABSENT_PREIMAGE_DIGEST);
-    if (!prepared.ok) throw new Error(`setup failed: ${prepared.reason}`);
-
-    // A DIFFERENT real directory, not a symlink, now occupies the root's
-    // path — same name, different device+inode.
-    rmSync(dir, { recursive: true, force: true });
-    mkdirSync(dir);
-
-    const result = executeWritePermit(prepared.permit, "escaped");
-    expect(result.ok).toBe(false);
-    expect(existsSync(join(dir, "file.txt"))).toBe(false);
-  });
-
-  test("R2/R3 regression (third-pass, outside_approved_target_swap): an approved outside-root target's own parent swapped for a symlink AFTER authorization is caught by the same executor, not the old check-then-write fallback", () => {
-    dir = mkdtempSync(join(tmpdir(), "brainstem-paths-r2-"));
-    const approved = mkdtempSync(join(tmpdir(), "brainstem-paths-r2-approved-"));
-    const unapproved = mkdtempSync(join(tmpdir(), "brainstem-paths-r2-unapproved-"));
-    writeFileSync(join(approved, "file.txt"), "same");
-    writeFileSync(join(unapproved, "file.txt"), "same");
-
-    const target = join(approved, "file.txt");
-    const prepared = prepareWritePermit(dir, target, "new", ABSENT_PREIMAGE_DIGEST);
-    if (!prepared.ok) throw new Error(`setup failed: ${prepared.reason}`);
-    expect(prepared.permit.anchorPath).toBe(approved);
-
-    // The approved directory's OWN parent-level identity is swapped for a
-    // symlink to an unapproved sibling containing an identical initial file
-    // — content equality must never be treated as target-identity equality.
-    rmSync(approved, { recursive: true, force: true });
-    symlinkSync(unapproved, approved);
-
-    const result = executeWritePermit(prepared.permit, "new");
-    expect(result.ok).toBe(false);
-    expect(readFileSync(join(unapproved, "file.txt"), "utf8")).toBe("same");
-
-    rmSync(unapproved, { recursive: true, force: true });
+  test.each(["existing", "absent", "outside", "symlink", "hardlink", "nested", "directory"])("refuses %s targets without staging, replacing, or chmod", (kind) => {
+    dir = mkdtempSync(join(tmpdir(), "brainstem-write-unavailable-"));
+    const root = join(dir, "repo");
+    mkdirSync(root);
+    const outside = join(dir, "outside.txt");
+    writeFileSync(outside, "outside");
+    chmodSync(outside, 0o600);
+    const existing = join(root, "file.txt");
+    writeFileSync(existing, "concurrent edit");
+    chmodSync(existing, 0o755);
+    symlinkSync(outside, join(root, "link.txt"));
+    linkSync(outside, join(root, "hard.txt"));
+    mkdirSync(join(root, "folder"));
+    const targets: Record<string, string> = {
+      existing: "file.txt", absent: "new.txt", outside, symlink: "link.txt",
+      hardlink: "hard.txt", nested: "new/deep/file.txt", directory: "folder",
+    };
+    const before = readdirSync(root).sort();
+    const inode = statSync(existing).ino;
+    const result = writeFileVerified(root, targets[kind]!, "stale replacement");
+    expect(result).toEqual({ ok: false, reason: WRITE_UNAVAILABLE_REASON });
+    expect(readFileSync(existing, "utf8")).toBe("concurrent edit");
+    expect(statSync(existing).ino).toBe(inode);
+    expect(statSync(existing).mode & 0o777).toBe(0o755);
+    expect(readFileSync(outside, "utf8")).toBe("outside");
+    expect(statSync(outside).mode & 0o777).toBe(0o600);
+    expect(readdirSync(root).sort()).toEqual(before);
+    expect(existsSync(join(root, "new"))).toBe(false);
   });
 });
