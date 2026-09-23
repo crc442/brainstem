@@ -255,6 +255,37 @@ function captureIntermediatePreconditions(anchorPath: string, components: string
   return { ok: true, preconditions };
 }
 
+/**
+ * What was true of the FINAL file itself at authorization time: either it
+ * existed as a regular file with this identity, or it did not (which
+ * includes a symlink or other non-regular occupant — there is no regular
+ * file identity to bind there). Verified again on the SAME descriptor the
+ * executor opens to read the preimage digest — never a separate stat
+ * followed by a separate reopen — so a file byte-for-byte identical to the
+ * original (equal CONTENT) but substituted for a different file object
+ * (unequal IDENTITY) between authorization and execution is distinguished
+ * from "nothing changed", exactly like an intermediate directory swap is.
+ *
+ * Deliberately does NOT itself refuse a symlink/non-regular final target —
+ * that stays the executor's own job (FINAL_IS_SYMLINK/FINAL_NOT_REGULAR),
+ * which is real defense in depth precisely because it is independent of
+ * whatever this function (or checkWriteTarget, at gate time) already
+ * concluded; duplicating the refusal here would collapse those into one
+ * layer.
+ */
+function probeFinalFile(finalPath: string): { kind: "exists"; dev: string; ino: string } | { kind: "missing" } {
+  let st;
+  try {
+    st = lstatSync(finalPath, { bigint: true });
+  } catch {
+    return { kind: "missing" };
+  }
+  if (st.isSymbolicLink() || !st.isFile()) {
+    return { kind: "missing" };
+  }
+  return { kind: "exists", dev: st.dev.toString(), ino: st.ino.toString() };
+}
+
 function anchorForInRoot(canonicalRoot: string, components: string[]): AnchorResult {
   const probe = probeAnchor(canonicalRoot);
   if (probe.kind === "missing") return { ok: false, reason: `refusing to write: project root "${canonicalRoot}" does not exist` };
@@ -313,6 +344,8 @@ export interface WritePermit {
   components: string[];
   /** One entry per intermediate directory strictly between the anchor and the final file — i.e. components.slice(0, -1) — in descent order. */
   intermediatePreconditions: ComponentPrecondition[];
+  /** What was true of the final file itself at authorization time — see probeFinalFile. Verified on the same descriptor the executor reads the preimage digest from, so a byte-identical replacement file is not mistaken for the original. */
+  finalIdentity: { kind: "exists"; dev: string; ino: string } | { kind: "missing" };
   targetKey: string;
   contentDigest: string;
   preimageDigest: string;
@@ -345,6 +378,7 @@ export function prepareWritePermit(root: string, target: string, content: string
   if (!anchor.ok) return anchor;
   const preconditions = captureIntermediatePreconditions(anchor.anchorPath, anchor.components);
   if (!preconditions.ok) return preconditions;
+  const finalProbe = probeFinalFile(join(anchor.anchorPath, ...anchor.components));
   return {
     ok: true,
     permit: {
@@ -353,6 +387,7 @@ export function prepareWritePermit(root: string, target: string, content: string
       anchorIno: anchor.anchorIno,
       components: anchor.components,
       intermediatePreconditions: preconditions.preconditions,
+      finalIdentity: finalProbe,
       targetKey: absLexical,
       contentDigest: contentHash(content),
       preimageDigest,
@@ -380,6 +415,9 @@ function describeHelperFailure(status: number | null | undefined, stderr: string
   if (trimmed.startsWith("FINAL_NOT_REGULAR:")) {
     return "refusing to write: an existing non-regular file occupies that path";
   }
+  if (trimmed.startsWith("FINAL_IDENTITY_MISMATCH:")) {
+    return `refusing to write: the file changed since authorization (${trimmed.slice("FINAL_IDENTITY_MISMATCH:".length)}) — a byte-identical replacement is not the same file`;
+  }
   if (trimmed.startsWith("INVALID_COMPONENT:")) {
     return `refusing to write: invalid path component ${trimmed.slice("INVALID_COMPONENT:".length)}`;
   }
@@ -401,6 +439,7 @@ function runDescriptorRelativeWrite(pythonBin: string, permit: WritePermit, cont
   const preconditionArgs = permit.intermediatePreconditions.flatMap((p) =>
     p.kind === "exists" ? ["E", p.dev, p.ino] : ["M", "-", "-"],
   );
+  const finalIdentityArgs = permit.finalIdentity.kind === "exists" ? [permit.finalIdentity.dev, permit.finalIdentity.ino] : ["-", "-"];
   let stdout: string;
   try {
     stdout = execFileSync(
@@ -411,6 +450,7 @@ function runDescriptorRelativeWrite(pythonBin: string, permit: WritePermit, cont
         permit.anchorDev,
         permit.anchorIno,
         permit.preimageDigest,
+        ...finalIdentityArgs,
         String(intermediate.length),
         ...preconditionArgs,
         ...intermediate,

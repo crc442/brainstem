@@ -29,13 +29,15 @@ Protocol:
     [1] expected-anchor-dev
     [2] expected-anchor-ino
     [3] expected-preimage-digest-or-"-"
-    [4] n-intermediate (count of intermediate directory components)
+    [4] expected-final-dev-or-"-"
+    [5] expected-final-ino-or-"-"
+    [6] n-intermediate (count of intermediate directory components)
     for i in 0..n-intermediate-1:
-      [5+3i]   precondition kind: "E" (expected to exist) or "M" (expected
+      [7+3i]   precondition kind: "E" (expected to exist) or "M" (expected
                 missing, to be created)
-      [5+3i+1] expected dev ("-" when kind is "M")
-      [5+3i+2] expected ino ("-" when kind is "M")
-    [5+3*n .. 5+3*n+n-1]  intermediate component NAMES, in descent order
+      [7+3i+1] expected dev ("-" when kind is "M")
+      [7+3i+2] expected ino ("-" when kind is "M")
+    [7+3*n .. 7+3*n+n-1]  intermediate component NAMES, in descent order
     [last] final component name
   stdin: the raw bytes to write (read fully before any filesystem action)
   stdout on success: "OK <bytesWritten>"
@@ -61,17 +63,24 @@ caller at the SAME authorization moment as the anchor:
 
 expected-preimage-digest is either "-" (skip the check), "absent" (the
 caller expects no file exists there yet), or a lowercase hex sha256 of the
-expected CURRENT content. The check happens inside the SAME verified fd
-chain, immediately before the write — never a separate, earlier, re-racable
-step — so a concurrent edit AND a concurrent symlink/directory swap are both
-bound to execution by the same boundary.
+expected CURRENT content. expected-final-dev/ino are the final file's own
+device+inode at authorization time ("-" when not applicable — the caller
+expected absence, or opted out of the check), verified on the SAME opened
+descriptor the preimage digest is read from — never a separate stat
+followed by a separate reopen, and never satisfied by content equality
+alone: a file replaced by a byte-identical copy (same digest, different
+inode) is rejected exactly like a directory replaced by a byte-identical
+one is. All final-file checks happen inside the SAME verified fd chain,
+immediately before the write, so a concurrent edit, a concurrent identity
+swap, AND a concurrent ancestor symlink/directory swap are all bound to
+execution by the same boundary.
 
 Exit codes: 2 anchor open or identity check failed, 3 an intermediate
 component's open, precondition, or identity check failed, 4 the final
 component is an existing symlink, 5 the final component exists but is not a
 regular file, 6 an argv path component is not a single safe path segment,
 7 unexpected OS error during the write/rename itself, 8 the existing
-content's digest did not match expected-preimage-digest, 9 malformed
+content's digest or identity did not match what was expected, 9 malformed
 numeric argv values.
 
 Requires a platform where Python's `os` module supports dir_fd for open,
@@ -128,17 +137,19 @@ def main():
         return
 
     args = sys.argv[1:]
-    if len(args) < 5:
-        fail(1, "USAGE: anchor expected_dev expected_ino expected_digest_or_dash n_intermediate [kind dev ino]... [names]... final_name  (content on stdin)")
+    if len(args) < 7:
+        fail(1, "USAGE: anchor expected_dev expected_ino expected_digest_or_dash expected_final_dev_or_dash expected_final_ino_or_dash n_intermediate [kind dev ino]... [names]... final_name  (content on stdin)")
     anchor = args[0]
     expected_anchor_dev = parse_int(args[1], 9, "anchor_dev")
     expected_anchor_ino = parse_int(args[2], 9, "anchor_ino")
     expected_digest = args[3]
-    n_intermediate = parse_int(args[4], 9, "n_intermediate")
+    expected_final_dev = None if args[4] == "-" else parse_int(args[4], 9, "final_dev")
+    expected_final_ino = None if args[5] == "-" else parse_int(args[5], 9, "final_ino")
+    n_intermediate = parse_int(args[6], 9, "n_intermediate")
     if n_intermediate < 0:
         fail(9, "BAD_NUMERIC_ARG:n_intermediate:%d" % n_intermediate)
 
-    idx = 5
+    idx = 7
     preconditions = []
     for _ in range(n_intermediate):
         if idx + 3 > len(args):
@@ -220,38 +231,60 @@ def main():
                 os.close(dir_fd)
                 dir_fd = new_fd
 
+        # The final component is opened ONCE (O_NOFOLLOW alone rejects a
+        # symlink at open time — no separate stat-then-open gap), and every
+        # subsequent check (type, identity, preimage digest) is performed on
+        # THAT SAME descriptor, never a later path-based reopen. This is
+        # what lets identity be verified on "the descriptor actually used",
+        # matching the anchor/intermediate components above, rather than
+        # trusting a stat that could already be stale by the time anything
+        # else happens.
         mode = None
         existed = False
+        final_fd = None
         try:
-            st = os.stat(final_name, dir_fd=dir_fd, follow_symlinks=False)
-            if stat.S_ISLNK(st.st_mode):
-                fail(4, "FINAL_IS_SYMLINK:%s" % final_name)
-            if not stat.S_ISREG(st.st_mode):
-                fail(5, "FINAL_NOT_REGULAR:%s" % final_name)
-            mode = st.st_mode & 0o777
-            existed = True
+            # O_NONBLOCK: a plain O_RDONLY open of a FIFO blocks until a
+            # writer opens it, which would hang this process indefinitely if
+            # something other than a regular file occupies the path.
+            # O_NONBLOCK makes that open return immediately instead; it has
+            # no effect on a regular file, so ordinary reads below (which
+            # explicitly loop on os.read) are unaffected.
+            final_fd = os.open(final_name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=dir_fd)
         except FileNotFoundError:
             pass
+        except OSError as e:
+            fail(4, "FINAL_IS_SYMLINK:%s:%s" % (final_name, e))
 
-        if expected_digest != "-":
-            if not existed:
-                if expected_digest != "absent":
-                    fail(8, "PREIMAGE_MISMATCH:expected %s but no file exists" % expected_digest)
-            else:
-                # Read via the SAME verified dir_fd, O_NOFOLLOW again as
-                # defense in depth even though the preceding stat already
-                # confirmed a regular file — never a path-based reopen.
-                read_fd = os.open(final_name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=dir_fd)
-                try:
+        if final_fd is not None:
+            try:
+                st = os.fstat(final_fd)
+                if not stat.S_ISREG(st.st_mode):
+                    fail(5, "FINAL_NOT_REGULAR:%s" % final_name)
+                mode = st.st_mode & 0o777
+                existed = True
+                if expected_final_dev is not None and expected_final_ino is not None:
+                    if st.st_dev != expected_final_dev or st.st_ino != expected_final_ino:
+                        fail(
+                            8,
+                            "FINAL_IDENTITY_MISMATCH:%s expected dev=%s ino=%s but found dev=%s ino=%s"
+                            % (final_name, expected_final_dev, expected_final_ino, st.st_dev, st.st_ino),
+                        )
+                if expected_digest not in ("-",):
+                    if expected_digest == "absent":
+                        fail(8, "PREIMAGE_MISMATCH:expected absent but found an existing file")
                     hasher = hashlib.sha256()
-                    with os.fdopen(read_fd, "rb", closefd=True) as rf:
-                        for chunk in iter(lambda: rf.read(1024 * 1024), b""):
-                            hasher.update(chunk)
+                    while True:
+                        chunk = os.read(final_fd, 1024 * 1024)
+                        if not chunk:
+                            break
+                        hasher.update(chunk)
                     actual_digest = hasher.hexdigest()
-                except BaseException:
-                    raise
-                if expected_digest == "absent" or actual_digest != expected_digest:
-                    fail(8, "PREIMAGE_MISMATCH:expected %s but found %s" % (expected_digest, actual_digest))
+                    if actual_digest != expected_digest:
+                        fail(8, "PREIMAGE_MISMATCH:expected %s but found %s" % (expected_digest, actual_digest))
+            finally:
+                os.close(final_fd)
+        elif expected_digest not in ("-", "absent"):
+            fail(8, "PREIMAGE_MISMATCH:expected %s but no file exists" % expected_digest)
 
         tmp_name = ".%s.%d.tmp" % (final_name, os.getpid())
         try:
