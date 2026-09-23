@@ -124,6 +124,24 @@ async function reconstructRead(
 }
 
 describe("R5/R6: read_output — full recovery, byte-precise pagination, honest receipts", () => {
+  test.each([7800, 7900, 7999, 8000, 8001])("a %i-character line makes progress after receipt sizing", async (length) => {
+    const { store, readOutput } = setup();
+    const source = "x".repeat(length) + "\nnext";
+    const id = putArtifact(store, { output: source });
+    const first = await readOutput.execute("first", { id });
+    const page = textOf(first as never);
+    expect(page.length).toBeLessThanOrEqual(8000);
+    expect(page).not.toContain("lines 1-0");
+    expect(await reconstructRead(readOutput, id, { maxPages: 5 })).toBe(source);
+  });
+
+  test("receipt-driven byte pagination preserves Unicode in a non-default stream", async () => {
+    const { store, readOutput } = setup();
+    const source = "é🙂".repeat(2666) + "\nnext";
+    const id = putArtifact(store, { stdout: "other", stderr: source });
+    expect(await reconstructRead(readOutput, id, { stream: "stderr", maxPages: 10 })).toBe(source);
+  });
+
   test("a 60,000-character capture is recoverable in full via repeated reads, without gaps or duplicated bytes", async () => {
     const { store, readOutput } = setup();
     const lines = Array.from({ length: 3_000 }, (_, i) => `line-${i}`);
