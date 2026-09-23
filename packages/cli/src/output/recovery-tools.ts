@@ -228,7 +228,18 @@ export function makeRecoveryTools(deps: RecoveryToolDeps): AgentTool[] {
       // continuation notice pointing right back at the same startLine forever.
       const fit = params.startByteInLine === undefined ? fitWholeLines(lines, REVIEW_CHAR_CAP) : { text: "", count: 0 };
 
-      if (params.startByteInLine !== undefined || fit.count === 0) {
+      const rendered = fitPageToBudget(fit.count, REVIEW_CHAR_CAP, (count) => {
+        const deliveredEndLine = slice.startLine + count - 1;
+        const pageBounded = count < lines.length;
+        const header = `artifact ${idLabel} stream ${streamLabel} lines ${slice.startLine}-${deliveredEndLine} of ${slice.totalLines} (${entryOutcome(complete)}${pageBounded ? ", page bounded — more requested lines remain" : ""})`;
+        const cont = pageBounded ? `\n[brainstem] continue with startLine=${deliveredEndLine + 1} to recover the rest of this range.` : "";
+        const body = lines.slice(0, count).join("\n");
+        return body.length > 0 ? `${header}\n${body}${cont}` : `${header}${cont}`;
+      });
+
+      // A line can fit by itself but fail once its receipt is included.
+      // Choose byte pagination from the final page fit, not the body fit.
+      if (params.startByteInLine !== undefined || rendered.size === 0) {
         // Either explicitly continuing a prior oversized-line page, or the
         // FIRST requested line itself doesn't fit in one page — paginate
         // that one line by UTF-8 byte range instead of silently clipping it
@@ -252,14 +263,6 @@ export function makeRecoveryTools(deps: RecoveryToolDeps): AgentTool[] {
         };
       }
 
-      const rendered = fitPageToBudget(fit.count, REVIEW_CHAR_CAP, (count) => {
-        const deliveredEndLine = slice.startLine + count - 1;
-        const pageBounded = count < lines.length;
-        const header = `artifact ${idLabel} stream ${streamLabel} lines ${slice.startLine}-${deliveredEndLine} of ${slice.totalLines} (${entryOutcome(complete)}${pageBounded ? ", page bounded — more requested lines remain" : ""})`;
-        const cont = pageBounded ? `\n[brainstem] continue with startLine=${deliveredEndLine + 1} to recover the rest of this range.` : "";
-        const body = lines.slice(0, count).join("\n");
-        return body.length > 0 ? `${header}\n${body}${cont}` : `${header}${cont}`;
-      });
       return {
         content: [{ type: "text", text: rendered.text }],
         details: { outcome: "ok", startLine: slice.startLine, endLine: slice.startLine + rendered.size - 1 },
