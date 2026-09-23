@@ -9,6 +9,10 @@ executor and its permit path have been removed. Safe managed writes are **not
 implemented**; restoring them remains a capability release gate. The original
 acceptance criteria below are unchanged.
 
+The follow-up [managed write backend plan](2026-09-23-managed-write-backend.md)
+defines the ownership model, feasibility prototype and release gates for
+restoring a demonstrated write capability.
+
 Review baseline: `d7c5d97`. Latest fixes follow validation of `dc1fb12`.
 
 Validation: `bun run test` — 445 passing tests across 39 files;
