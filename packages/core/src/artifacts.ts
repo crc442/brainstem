@@ -88,16 +88,30 @@ export function sliceByLines(
 // capture cannot turn search_output into a hang; matches are capped at `limit`.
 export const DEFAULT_MAX_SCAN_CHARS = 1_000_000;
 
+// A regex must only ever be evaluated against a COMPLETE original line —
+// never a character-offset fragment of one, which silently breaks anchors
+// (^/$), lookaround, and any pattern that spans the cut point (see R6 in
+// docs/plans/2026-09-22-review-remediation.md). maxScanChars bounds how many
+// separate lines a single call is willing to start scanning, but the line
+// already "in progress" when that budget is reached is always still
+// evaluated to its own true end — bounded instead by this much higher
+// ceiling, which exists only to stop one pathological line from making a
+// single call scan unboundedly. A line beyond even THIS ceiling is never
+// fragment-tested; it is reported as unscannable (undetermined), not absent.
+const MAX_LINE_CHARS_MULTIPLIER = 8;
+
 export interface SearchResult {
   matches: { line: number; text: string }[];
   totalMatches: number;
   truncated: boolean;
-  /** True only when the scan cap cut the input short — distinct from `truncated`, which is also set by an ordinary `limit`. */
+  /** True only when the scan cap stopped the input short of its end — distinct from `truncated`, which is also set by an ordinary `limit`. Always lands on a line boundary; a line is never partially scanned. */
   scanClipped: boolean;
-  /** Lines actually scanned within the given `content` — may be fewer than its total line count when `scanClipped` is true. A caller computing a coverage receipt must use this, not the line count of its own unclipped input, or it will overstate how much was actually searched. */
+  /** Lines actually scanned within the given `content` (matched, not-matched, or unscannable) — may be fewer than its total line count when `scanClipped` is true. */
   scannedLines: number;
-  /** Exact character count actually scanned (== content.length unless scanClipped). Lets a caller determine whether the scan cap landed exactly on a line boundary or mid-line, which `scannedLines` alone cannot distinguish. */
+  /** Exact character count actually scanned (== content.length unless scanClipped). Can exceed maxScanChars by up to one line's length, since the line in progress when the budget is reached is always finished, never cut. */
   scannedChars: number;
+  /** 1-indexed line numbers too large to evaluate even whole (see MAX_LINE_CHARS_MULTIPLIER) and therefore skipped entirely: neither matched nor confirmed absent. Empty for ordinary content. */
+  unscannableLines: number[];
 }
 
 export function searchContent(content: string, pattern: string, limit = 50, maxScanChars: number = DEFAULT_MAX_SCAN_CHARS): SearchResult {
@@ -107,24 +121,43 @@ export function searchContent(content: string, pattern: string, limit = 50, maxS
   } catch (cause) {
     throw new InvalidPatternError(pattern, cause);
   }
-  const scanClipped = content.length > maxScanChars;
-  const scannedChars = scanClipped ? maxScanChars : content.length;
-  const lines = splitLines(scanClipped ? content.slice(0, maxScanChars) : content);
+  const maxLineChars = maxScanChars * MAX_LINE_CHARS_MULTIPLIER;
+  const allLines = splitLines(content);
   const cap = Math.max(0, Math.floor(limit));
   const matches: { line: number; text: string }[] = [];
+  const unscannableLines: number[] = [];
   let totalMatches = 0;
-  for (let i = 0; i < lines.length; i++) {
-    if (!re.test(lines[i]!)) continue;
-    totalMatches += 1;
-    if (matches.length < cap) matches.push({ line: i + 1, text: lines[i]! });
+  let scannedChars = 0;
+  let scanClipped = false;
+  let scannedLines = 0;
+
+  for (let i = 0; i < allLines.length; i++) {
+    // Refuse to START a new line once the budget is already spent — but a
+    // line already being processed always runs to its own true end (below),
+    // never sliced mid-way.
+    if (scannedChars >= maxScanChars) {
+      scanClipped = true;
+      break;
+    }
+    const line = allLines[i]!;
+    if (line.length > maxLineChars) {
+      unscannableLines.push(i + 1);
+    } else if (re.test(line)) {
+      totalMatches += 1;
+      if (matches.length < cap) matches.push({ line: i + 1, text: line });
+    }
+    scannedChars += line.length + (i < allLines.length - 1 ? 1 : 0);
+    scannedLines += 1;
   }
+
   return {
     matches,
     totalMatches,
-    truncated: totalMatches > matches.length || scanClipped,
+    truncated: totalMatches > matches.length || scanClipped || unscannableLines.length > 0,
     scanClipped,
-    scannedLines: lines.length,
+    scannedLines,
     scannedChars,
+    unscannableLines,
   };
 }
 

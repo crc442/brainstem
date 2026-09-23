@@ -207,9 +207,6 @@ export function makeRecoveryTools(deps: RecoveryToolDeps): AgentTool[] {
     pattern: Type.String({ description: "Regular expression to search for" }),
     limit: Type.Optional(Type.Number({ description: `Maximum matches to return (default ${SEARCH_DEFAULT_LIMIT})` })),
     startLine: Type.Optional(Type.Number({ description: "Resume scanning from this line (1-indexed, default 1) — use the continuation notice from a truncated search to continue coverage without gaps or re-scanning." })),
-    startCharInLine: Type.Optional(
-      Type.Number({ description: "Resume mid-line after a scan that was cut off before reaching this line's end (from a previous page's continuation notice); character offset within startLine's own text." }),
-    ),
   });
   const searchOutput: AgentTool<typeof searchParams> = {
     name: "search_output",
@@ -240,14 +237,12 @@ export function makeRecoveryTools(deps: RecoveryToolDeps): AgentTool[] {
 
       const allLines = splitLines(content);
       const startLine = clampInt(params.startLine, 1, Math.max(1, allLines.length));
-      // Resuming mid-line (after a scan that was cut off before reaching
-      // this line's own end) means scanning the REMAINDER of startLine, not
-      // its full text — otherwise the already-scanned prefix would be
-      // rescanned and, worse, byte/char positions in receipts would drift.
-      const startCharInLine = clampInt(params.startCharInLine, 0, Number.MAX_SAFE_INTEGER, 0);
-      const currentLineFull = allLines[startLine - 1] ?? "";
-      const currentLineRemainder = currentLineFull.slice(Math.min(startCharInLine, currentLineFull.length));
-      const scanFrom = [currentLineRemainder, ...allLines.slice(startLine)].join("\n");
+      // Every resume is a whole-line boundary — scanFrom's own line 1 is
+      // ALWAYS the complete, original text of `startLine`, never a fragment
+      // of it. searchContent itself guarantees it never stops mid-line (see
+      // R6 in docs/plans/2026-09-22-review-remediation.md), so there is
+      // nothing here to reconstruct a partial line from.
+      const scanFrom = allLines.slice(startLine - 1).join("\n");
       const complete = entry.meta.streams[stream]?.complete ?? entry.meta.captureComplete;
 
       let result;
@@ -273,48 +268,14 @@ export function makeRecoveryTools(deps: RecoveryToolDeps): AgentTool[] {
         throw error;
       }
       // Line numbers from searchContent are relative to `scanFrom`, whose
-      // first "line" is startLine's own remainder — so line 1 of scanFrom
-      // IS original line `startLine` (not startLine+1), same numbering as
-      // if there were no character offset at all.
+      // first line IS original line `startLine` in full — so line 1 of
+      // scanFrom is original line `startLine`, with no offset arithmetic.
       const rebasedMatches = result.matches.map((m) => ({ line: m.line + startLine - 1, text: m.text }));
-
-      // Determine whether the scan cap landed mid-line (as opposed to
-      // exactly on a line boundary, or not clipping at all). A single very
-      // long line can make MAX_SCAN_CHARS cut it off before its own
-      // terminating newline; resuming at "the next line" in that case would
-      // permanently skip the unscanned remainder of THIS line — including
-      // any match within it — since a later call would never look at those
-      // characters again. This is the actual defect an earlier version had:
-      // scannedLines alone can't distinguish "this line was fully scanned
-      // and just happens to be the last one" from "this line was cut off
-      // mid-way", so scannedChars (the exact scanned prefix) is needed.
-      let scanClippedMidLine = false;
-      let midLineResumeLine = startLine;
-      let midLineResumeChar = 0;
-      let fullyScannedThroughLine = startLine - 1; // last line fully covered by this scan, for a truthful "scanned X of Y" receipt
-      if (result.scanClipped) {
-        const scannedPrefix = scanFrom.slice(0, result.scannedChars);
-        const lastNewlineIdx = scannedPrefix.lastIndexOf("\n");
-        const cutAtLineBoundary = lastNewlineIdx === scannedPrefix.length - 1;
-        if (!cutAtLineBoundary) {
-          scanClippedMidLine = true;
-          if (lastNewlineIdx === -1) {
-            // Still within scanFrom's first line, i.e. startLine's own remainder.
-            midLineResumeLine = startLine;
-            midLineResumeChar = startCharInLine + scannedPrefix.length;
-            fullyScannedThroughLine = startLine - 1;
-          } else {
-            const linesFullyConsumedInScanFrom = splitLines(scannedPrefix.slice(0, lastNewlineIdx + 1)).length;
-            midLineResumeLine = startLine + linesFullyConsumedInScanFrom;
-            midLineResumeChar = scannedPrefix.length - (lastNewlineIdx + 1);
-            fullyScannedThroughLine = midLineResumeLine - 1;
-          }
-        } else {
-          fullyScannedThroughLine = startLine - 1 + result.scannedLines;
-        }
-      } else {
-        fullyScannedThroughLine = startLine - 1 + result.scannedLines;
-      }
+      const rebasedUnscannable = result.unscannableLines.map((l) => l + startLine - 1);
+      // Last line fully covered by this scan (matched, not-matched, or
+      // explicitly unscannable) — always a whole-line count now, since
+      // searchContent never stops mid-line.
+      const fullyScannedThroughLine = startLine - 1 + result.scannedLines;
 
       // Bound the delivered page to the same review budget as everything
       // else: a match list found within scan+limit can still be too large
@@ -344,32 +305,25 @@ export function makeRecoveryTools(deps: RecoveryToolDeps): AgentTool[] {
       }
       const pageBounded = deliveredMatches.length < rebasedMatches.length || matchTruncated;
 
-      // Continuation: whenever there's more to find than was delivered here
-      // — whether because of the match `limit`, the page's own character
-      // budget, or the scan cap — resume right after the last DELIVERED
-      // match when one exists (safe regardless of a mid-line clip: it is
-      // always at or before the true scan boundary, so at worst it
-      // re-scans a little, never skips). Only when NOTHING was delivered
-      // does the exact scan boundary matter, and a mid-line clip there must
-      // resume WITHIN that line, not skip past its unscanned remainder.
-      const hasMoreToDeliver = pageBounded || result.truncated;
+      // Continuation: whenever there's more of the CONTENT left to scan —
+      // because of the match `limit`, the page's own character budget, or
+      // the scan cap — resume right after the last delivered match when one
+      // exists, else right after the last fully-scanned line (always a
+      // whole-line boundary now; searchContent never stops mid-line).
+      // Compared against the true total (not the limit-capped match list),
+      // so a limit cap (many more matches than fit `limit`) triggers this
+      // the same way a page-body truncation does. An unscannable line does
+      // NOT by itself justify a "keep scanning" continuation — re-scanning
+      // it would hit the same ceiling again — so it gets its own note and
+      // read_output pointer below instead.
+      const hasMoreToDeliver = result.totalMatches > deliveredMatches.length || result.scanClipped;
       let resumeLine: number | undefined;
-      let resumeCharInLine: number | undefined;
       if (hasMoreToDeliver) {
-        if (deliveredMatches.length > 0) {
-          resumeLine = deliveredMatches[deliveredMatches.length - 1]!.line + 1;
-        } else if (scanClippedMidLine) {
-          resumeLine = midLineResumeLine;
-          resumeCharInLine = midLineResumeChar;
-        } else {
-          resumeLine = fullyScannedThroughLine + 1;
-        }
+        resumeLine = deliveredMatches.length > 0 ? deliveredMatches[deliveredMatches.length - 1]!.line + 1 : fullyScannedThroughLine + 1;
       }
 
       const notes: string[] = [];
-      if (scanClippedMidLine) {
-        notes.push(`scan bounded by size mid-line — line ${midLineResumeLine} only partially scanned (${midLineResumeChar} chars)`);
-      } else if (result.scanClipped) {
+      if (result.scanClipped) {
         notes.push("scan bounded by size — matches beyond the scanned range are not yet known");
       }
       if (matchTruncated) {
@@ -377,19 +331,18 @@ export function makeRecoveryTools(deps: RecoveryToolDeps): AgentTool[] {
       } else if (pageBounded) {
         notes.push(`page bounded — showing ${deliveredMatches.length} of ${rebasedMatches.length} matches found in this range`);
       }
-      // fullyScannedThroughLine can be startLine - 1 (zero WHOLE lines
-      // covered) when the very first line is itself cut off mid-scan —
-      // "lines N-(N-1)" would read as a backwards range, so phrase that
-      // case as "no complete lines yet" instead of a nonsensical span.
-      const coverageText =
-        fullyScannedThroughLine >= startLine
-          ? `lines ${startLine}-${fullyScannedThroughLine} of ${allLines.length}`
-          : `no complete lines yet (line ${startLine} in progress) of ${allLines.length}`;
+      if (rebasedUnscannable.length > 0) {
+        // Never label these lines "no match": their match status is
+        // genuinely undetermined, and a fragment-based check (the earlier
+        // defect) could produce a false positive or false negative. Point at
+        // read_output, the one path that returns their true, complete text.
+        notes.push(
+          `line(s) ${rebasedUnscannable.join(", ")} exceed the per-line search limit and were not evaluated (undetermined, not absent) — use read_output with startLine=<N> to inspect directly`,
+        );
+      }
+      const coverageText = `lines ${startLine}-${fullyScannedThroughLine} of ${allLines.length}`;
       const header = `artifact ${params.id} stream ${stream} search "${params.pattern}" from line ${startLine}: ${result.totalMatches} match(es) found in ${coverageText} (${entryOutcome(complete)}${notes.length > 0 ? `, ${notes.join("; ")}` : ""})`;
-      const continuationNotice =
-        resumeLine !== undefined
-          ? `\n[brainstem] continue with startLine=${resumeLine}${resumeCharInLine !== undefined ? `, startCharInLine=${resumeCharInLine}` : ""} to cover the rest.`
-          : "";
+      const continuationNotice = resumeLine !== undefined ? `\n[brainstem] continue with startLine=${resumeLine} to cover the rest.` : "";
       const text = renderedBody.length === 0 ? `${header}\nno matches${continuationNotice}` : `${header}\n${renderedBody}${continuationNotice}`;
       return {
         content: [{ type: "text", text }],
@@ -399,6 +352,7 @@ export function makeRecoveryTools(deps: RecoveryToolDeps): AgentTool[] {
           truncated: result.truncated,
           scannedTo: fullyScannedThroughLine,
           delivered: deliveredMatches.length,
+          unscannableLines: rebasedUnscannable,
         },
       };
     },
