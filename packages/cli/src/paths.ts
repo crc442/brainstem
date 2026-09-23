@@ -1,8 +1,7 @@
 import { execFileSync } from "node:child_process";
-import { chmodSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { lstatSync } from "node:fs";
 import { basename, dirname, isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { randomBytes } from "node:crypto";
 import { contentHash, expandHome, isInside, normalizeAbsolute, realpathIfExists, resolveParentForWrite, resolvePath } from "@brainstem/core";
 
 // The canonical path resolvers live in @brainstem/core/paths.ts so that
@@ -31,11 +30,9 @@ export interface WriteExecutorOptions {
   pythonBinCandidates?: string[];
   /**
    * sha256 hex digest the file's CURRENT content is expected to match
-   * (ABSENT_PREIMAGE_DIGEST if no file is expected yet), checked inside the
-   * SAME verified fd chain immediately before the write — not a separate,
-   * earlier, re-racable step. Binds the action to its preimage through
-   * execution, not just its target: a concurrent edit is rejected exactly
-   * like a concurrent symlink swap. Omit to skip the check.
+   * (ABSENT_PREIMAGE_DIGEST if no file is expected yet). Only meaningful to
+   * writeFileVerified's convenience one-shot form — see its doc comment.
+   * Omit to skip the check.
    */
   expectedPreimageDigest?: string;
 }
@@ -79,28 +76,26 @@ function resolvePythonBin(options: WriteExecutorOptions): string | undefined {
  *
  * "descriptor-relative" means a real isolated filesystem executor
  * (`packages/cli/src/native/verified-write.py`, invoked as a subprocess) is
- * available and is what actually performs every in-root write: it opens the
- * canonical root once, then walks each remaining path component relative to
- * the PREVIOUSLY VERIFIED parent directory's own file descriptor with
- * O_NOFOLLOW, so a symlink substituted into any ancestor — at any point
- * before or during that walk — cannot redirect the write, because the walk
- * never re-resolves a path string from scratch and never follows a symlink
- * it encounters. This is the real descriptor-relative/no-follow
- * traversal-and-commit the plan requires, not a second preflight check
- * layered on top of ordinary path-based I/O.
+ * available and is what actually performs every managed write, in-root or
+ * approved outside-root alike: it opens the caller's TRUST ANCHOR directory
+ * once — verifying its device+inode identity against what was captured at
+ * authorization time, not just that the path string still resolves to
+ * something — then walks each remaining path component relative to the
+ * PREVIOUSLY VERIFIED parent directory's own file descriptor with
+ * O_NOFOLLOW, so a symlink (or a different real directory swapped in under
+ * the same name) substituted into any ancestor — at any point before or
+ * during that walk — cannot redirect the write. This is the real
+ * descriptor-relative/no-follow traversal-and-commit the plan requires, not
+ * a second preflight check layered on top of ordinary path-based I/O.
  *
  * "unavailable" means no such executor could be confirmed (no working
  * `python3`/`python` with the required `os.*(dir_fd=...)` support, or an
- * unsupported platform such as Windows). On "unavailable", in-root managed
- * writes are REFUSED outright — there is no silent fallback to a
- * check-then-write path pretending to be equivalently safe. The plan does
- * not contain an escape hatch that permits an unsafe managed write to stay
- * enabled; "unavailable" is that explicit, honest outcome, not a
- * completion of the race guarantee.
- *
- * A write whose target resolves OUTSIDE the configured root is a narrower,
- * separately-scoped case (see writeFileVerified's own doc comment) that
- * does not depend on this capability.
+ * unsupported platform such as Windows). On "unavailable", managed writes
+ * are REFUSED outright — there is no silent fallback to a check-then-write
+ * path pretending to be equivalently safe, for in-root OR outside-root
+ * targets. The plan does not contain an escape hatch that permits an unsafe
+ * managed write to stay enabled; "unavailable" is that explicit, honest
+ * outcome, not a completion of the race guarantee.
  */
 export function writeCapability(options: WriteExecutorOptions = {}): WriteCapability {
   return resolvePythonBin(options) !== undefined ? "descriptor-relative" : "unavailable";
@@ -130,10 +125,11 @@ export interface WriteTargetCheck {
  * This function is GATE-TIME evidence and diagnostics (deciding ask/deny,
  * showing a diff, an early clear error message) — it is deliberately still
  * path-based and re-resolves on every call. It is NOT what makes the actual
- * write safe; that guarantee lives in writeFileVerified's descriptor-relative
- * executor for in-root writes. Do not treat a passing checkWriteTarget call
- * as proof that a subsequent write is safe from a concurrent substitution —
- * only the executor's own live traversal provides that.
+ * write safe; that guarantee lives in the prepareWritePermit/executeWritePermit
+ * pair's descriptor-relative executor. Do not treat a passing checkWriteTarget
+ * call as proof that a subsequent write is safe from a concurrent
+ * substitution — only the executor's own live traversal, anchored to an
+ * identity captured at authorization time, provides that.
  */
 export function checkWriteTarget(root: string, target: string): WriteTargetCheck {
   const resolvedTarget = resolveParentForWrite(root, target);
@@ -168,6 +164,19 @@ function absoluteLexicalPath(root: string, target: string): string {
 }
 
 /**
+ * The canonical identity a write's target must still match at execution
+ * time for it to be the SAME write that was authorized — computed from the
+ * SAME (root, target) pair prepareWritePermit uses, so a caller can detect
+ * "the tool call's own arguments changed after authorization" (R3: the
+ * changed_action reproduction) with a cheap string comparison, independent
+ * of and in addition to the descriptor-relative executor's own filesystem-
+ * level checks.
+ */
+export function writeTargetKey(root: string, target: string): string {
+  return absoluteLexicalPath(realpathIfExists(root), target);
+}
+
+/**
  * Splits `absLexical` into path segments relative to `canonicalRoot`, or
  * returns null if it does not resolve under the root. Deliberately LEXICAL
  * (never realpath'd): a component list built from a realpath would already
@@ -186,6 +195,127 @@ function componentsUnderRoot(canonicalRoot: string, absLexical: string): string[
     .filter((seg) => seg.length > 0);
 }
 
+type AnchorProbe = { kind: "ok"; dev: string; ino: string } | { kind: "missing" } | { kind: "invalid"; reason: string };
+
+/** lstat (never follows) a candidate anchor path, distinguishing "does not exist yet" (caller may walk further up) from "exists but isn't a usable real directory" (caller must refuse, never skip past it). */
+function probeAnchor(path: string): AnchorProbe {
+  let st;
+  try {
+    st = lstatSync(path, { bigint: true });
+  } catch {
+    return { kind: "missing" };
+  }
+  if (st.isSymbolicLink()) {
+    return { kind: "invalid", reason: `refusing to write: "${path}" is a symlink, not a real directory` };
+  }
+  if (!st.isDirectory()) {
+    return { kind: "invalid", reason: `refusing to write: "${path}" is not a directory` };
+  }
+  return { kind: "ok", dev: st.dev.toString(), ino: st.ino.toString() };
+}
+
+interface AnchorFound {
+  ok: true;
+  anchorPath: string;
+  anchorDev: string;
+  anchorIno: string;
+  components: string[];
+}
+type AnchorResult = AnchorFound | { ok: false; reason: string };
+
+function anchorForInRoot(canonicalRoot: string, components: string[]): AnchorResult {
+  const probe = probeAnchor(canonicalRoot);
+  if (probe.kind === "missing") return { ok: false, reason: `refusing to write: project root "${canonicalRoot}" does not exist` };
+  if (probe.kind === "invalid") return { ok: false, reason: probe.reason };
+  return { ok: true, anchorPath: canonicalRoot, anchorDev: probe.dev, anchorIno: probe.ino, components };
+}
+
+/**
+ * For a target OUTSIDE the configured root: the trust anchor is the DEEPEST
+ * EXISTING real directory on the path to it, captured (identity included)
+ * at authorization time — the same "pin an anchor, walk the rest
+ * descriptor-relative" strategy used for the in-root case, generalized to
+ * an arbitrary approved outside location instead of assuming a single fixed
+ * anchor (like "/") could safely walk every possible target (it cannot:
+ * ordinary system symlinks such as macOS's /tmp -> /private/tmp would
+ * themselves be rejected as "a component is a symlink").
+ *
+ * This anchor is pinned only as deep as something already exists: a symlink
+ * or non-directory found while walking up is refused outright (never
+ * silently skipped past), but an ancestor ABOVE the chosen anchor that gets
+ * swapped later is not covered by this mechanism — the same category of
+ * narrow, documented residual as an in-root ancestor swap two or more
+ * levels above an already-descended-into directory. See README "Write
+ * safety".
+ */
+function anchorForOutsideRoot(absLexical: string): AnchorResult {
+  let dir = dirname(absLexical);
+  const trailing: string[] = [basename(absLexical)];
+  for (;;) {
+    const probe = probeAnchor(dir);
+    if (probe.kind === "ok") return { ok: true, anchorPath: dir, anchorDev: probe.dev, anchorIno: probe.ino, components: trailing };
+    if (probe.kind === "invalid") return { ok: false, reason: probe.reason };
+    const parent = dirname(dir);
+    if (parent === dir) return { ok: false, reason: `refusing to write: no existing real ancestor directory found above "${absLexical}"` };
+    trailing.unshift(basename(dir));
+    dir = parent;
+  }
+}
+
+/**
+ * An immutable, single-use authorization record: everything the
+ * descriptor-relative executor needs to actually perform (or refuse) a
+ * write, captured ONCE at authorization time and never recomputed from
+ * live, possibly-attacker-mutated tool-call arguments. `targetKey` and
+ * `contentDigest` let a caller (tools.ts's write execute()) detect that the
+ * ACTUAL arguments it was asked to execute no longer match what this permit
+ * authorizes — the R3 "changed_action" gap — before ever touching the
+ * filesystem; `anchorPath`/`anchorDev`/`anchorIno`/`components` let the
+ * executor detect that the filesystem itself no longer matches what was
+ * authorized, independent of what the tool-call arguments say.
+ */
+export interface WritePermit {
+  anchorPath: string;
+  anchorDev: string;
+  anchorIno: string;
+  components: string[];
+  targetKey: string;
+  contentDigest: string;
+  preimageDigest: string;
+}
+
+export type PreparedWrite = { ok: true; permit: WritePermit } | { ok: false; reason: string };
+
+/**
+ * Builds a WritePermit from (root, target, content, preimageDigest) — call
+ * this exactly ONCE, at authorization time, using values captured BEFORE
+ * any await (a Jev judgment, a human approval wait) that an attacker could
+ * act within. The resulting permit is inert data: nothing about it changes
+ * if the caller's own `target`/`content` variables are mutated afterward.
+ */
+export function prepareWritePermit(root: string, target: string, content: string, preimageDigest: string): PreparedWrite {
+  const canonicalRoot = realpathIfExists(root);
+  const absLexical = absoluteLexicalPath(canonicalRoot, target);
+  const inRootComponents = componentsUnderRoot(canonicalRoot, absLexical);
+  const anchor =
+    inRootComponents !== null && inRootComponents.length > 0
+      ? anchorForInRoot(canonicalRoot, inRootComponents)
+      : anchorForOutsideRoot(absLexical);
+  if (!anchor.ok) return anchor;
+  return {
+    ok: true,
+    permit: {
+      anchorPath: anchor.anchorPath,
+      anchorDev: anchor.anchorDev,
+      anchorIno: anchor.anchorIno,
+      components: anchor.components,
+      targetKey: absLexical,
+      contentDigest: contentHash(content),
+      preimageDigest,
+    },
+  };
+}
+
 function describeHelperFailure(status: number | null | undefined, stderr: string): string {
   const trimmed = stderr.trim();
   if (trimmed.startsWith("SYMLINK_OR_NON_DIR:")) {
@@ -200,8 +330,11 @@ function describeHelperFailure(status: number | null | undefined, stderr: string
   if (trimmed.startsWith("INVALID_COMPONENT:")) {
     return `refusing to write: invalid path component ${trimmed.slice("INVALID_COMPONENT:".length)}`;
   }
-  if (trimmed.startsWith("ROOT_OPEN_FAILED:")) {
-    return `refusing to write: the project root could not be opened (${trimmed.slice("ROOT_OPEN_FAILED:".length)})`;
+  if (trimmed.startsWith("ANCHOR_IDENTITY_MISMATCH:")) {
+    return `refusing to write: the trust anchor directory changed since authorization (${trimmed.slice("ANCHOR_IDENTITY_MISMATCH:".length)})`;
+  }
+  if (trimmed.startsWith("ANCHOR_OPEN_FAILED:")) {
+    return `refusing to write: the trust anchor directory could not be opened without following a symlink (${trimmed.slice("ANCHOR_OPEN_FAILED:".length)})`;
   }
   if (trimmed.startsWith("PREIMAGE_MISMATCH:")) {
     return `file contents changed since approval was requested: ${trimmed.slice("PREIMAGE_MISMATCH:".length)}`;
@@ -209,29 +342,27 @@ function describeHelperFailure(status: number | null | undefined, stderr: string
   return `managed write failed (exit ${status ?? "unknown"}): ${trimmed || "unknown error"}`;
 }
 
-function runDescriptorRelativeWrite(
-  pythonBin: string,
-  canonicalRoot: string,
-  components: string[],
-  content: string,
-  expectedPreimageDigest: string,
-): WriteResult {
-  const finalName = components[components.length - 1]!;
-  const intermediate = components.slice(0, -1);
+function runDescriptorRelativeWrite(pythonBin: string, permit: WritePermit, content: string): WriteResult {
+  const finalName = permit.components[permit.components.length - 1]!;
+  const intermediate = permit.components.slice(0, -1);
   let stdout: string;
   try {
-    stdout = execFileSync(pythonBin, [NATIVE_HELPER_PATH, canonicalRoot, expectedPreimageDigest, ...intermediate, finalName], {
-      input: content,
-      encoding: "utf8",
-      timeout: HELPER_TIMEOUT_MS,
-      maxBuffer: 16 * 1024 * 1024,
-      // Fully capture stderr rather than the execFileSync default of also
-      // inheriting it to our own stderr — a rejected write (e.g. a real
-      // symlink attempt) is an expected, structured outcome here, not
-      // something that should print raw subprocess diagnostics to the
-      // terminal.
-      stdio: ["pipe", "pipe", "pipe"],
-    });
+    stdout = execFileSync(
+      pythonBin,
+      [NATIVE_HELPER_PATH, permit.anchorPath, permit.anchorDev, permit.anchorIno, permit.preimageDigest, ...intermediate, finalName],
+      {
+        input: content,
+        encoding: "utf8",
+        timeout: HELPER_TIMEOUT_MS,
+        maxBuffer: 16 * 1024 * 1024,
+        // Fully capture stderr rather than the execFileSync default of also
+        // inheriting it to our own stderr — a rejected write (e.g. a real
+        // symlink attempt) is an expected, structured outcome here, not
+        // something that should print raw subprocess diagnostics to the
+        // terminal.
+        stdio: ["pipe", "pipe", "pipe"],
+      },
+    );
   } catch (err) {
     const e = err as { status?: number | null; stderr?: string | Buffer };
     const stderr = typeof e.stderr === "string" ? e.stderr : (e.stderr?.toString("utf8") ?? "");
@@ -239,103 +370,49 @@ function runDescriptorRelativeWrite(
   }
   const match = stdout.trim().match(/^OK (\d+)$/);
   const bytesWritten = match ? Number(match[1]) : Buffer.byteLength(content, "utf8");
-  return { ok: true, resolvedTarget: join(canonicalRoot, ...components), bytesWritten };
+  return { ok: true, resolvedTarget: join(permit.anchorPath, ...permit.components), bytesWritten };
 }
 
 /**
- * Fallback for writes whose target resolves OUTSIDE the configured root.
- * Always requires explicit interactive human approval already (see
- * harness.ts) — unlike an in-root write, it is never auto-approved without
- * a person reviewing the actual target first — so the threat model this
- * narrows is bounded by how long that approval takes, not by an
- * unattended Jev decision. A single trusted anchor for a full
- * descriptor-relative walk does not exist for an arbitrary outside-root
- * location without either breaking on ordinary system symlinks (e.g.
- * macOS's /tmp -> /private/tmp, /var -> /private/var) or reintroducing the
- * exact gap the executor exists to close, so this path stays a
- * check-immediately-before-write + atomic same-directory rename. This is a
- * narrower, explicitly documented guarantee than the in-root path — see
- * README "Write safety".
+ * Executes a previously prepared WritePermit. This is the actual execution
+ * boundary: it verifies the content being written still matches what the
+ * permit authorized (closing R3's "changed_action" gap — the tool call's
+ * own payload cannot drift after authorization and still execute), then
+ * hands off to the descriptor-relative executor (or explicitly refuses when
+ * unavailable — never a silent downgrade to an unverified path-based
+ * write). Target-identity verification (the R2 "root swapped for a
+ * symlink" / "approved outside directory swapped" gap) happens inside the
+ * executor itself, anchored to the permit's own captured identity, not
+ * re-derived from anything the caller could have mutated.
  */
-function writeFileCheckThenWrite(root: string, target: string, content: string, expectedPreimageDigest?: string): WriteResult {
-  const check = checkWriteTarget(root, target);
-  if (!check.ok) return { ok: false, reason: check.reason! };
-
-  const dir = dirname(check.resolvedTarget);
-  mkdirSync(dir, { recursive: true });
-
-  const recheck = checkWriteTarget(root, target);
-  if (!recheck.ok) return { ok: false, reason: recheck.reason! };
-
-  if (expectedPreimageDigest !== undefined) {
-    let currentDigest = ABSENT_PREIMAGE_DIGEST;
-    try {
-      currentDigest = contentHash(readFileSync(recheck.resolvedTarget, "utf8"));
-    } catch {
-      currentDigest = ABSENT_PREIMAGE_DIGEST;
-    }
-    if (currentDigest !== expectedPreimageDigest) {
-      return {
-        ok: false,
-        reason: `file contents changed since approval was requested: expected ${expectedPreimageDigest} but found ${currentDigest}`,
-      };
-    }
+export function executeWritePermit(permit: WritePermit, content: string, options: WriteExecutorOptions = {}): WriteResult {
+  if (contentHash(content) !== permit.contentDigest) {
+    return { ok: false, reason: "write blocked: content no longer matches what was authorized (changed since approval)" };
   }
-
-  const base = basename(recheck.resolvedTarget);
-  const tmp = join(dir, `.${base}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`);
-  writeFileSync(tmp, content, { encoding: "utf8", flag: "wx" });
-  try {
-    if (recheck.existingMode !== undefined) {
-      chmodSync(tmp, recheck.existingMode);
-    }
-    renameSync(tmp, recheck.resolvedTarget);
-  } catch (err) {
-    try {
-      rmSync(tmp, { force: true });
-    } catch {
-      // best-effort cleanup only
-    }
-    throw err;
+  const pythonBin = resolvePythonBin(options);
+  if (pythonBin === undefined) {
+    return {
+      ok: false,
+      reason:
+        'managed write capability unavailable on this platform (no working descriptor-relative write executor found — see README "Write safety"): refusing to write rather than using an unverified check-then-write path',
+    };
   }
-  return { ok: true, resolvedTarget: recheck.resolvedTarget, bytesWritten: Buffer.byteLength(content, "utf8") };
+  return runDescriptorRelativeWrite(pythonBin, permit, content);
 }
 
 /**
- * Writes `content` to `target` under `root`.
- *
- * In-root targets (the common case, and the one that can be auto-approved
- * without a human ever reviewing it) go through the descriptor-relative
- * executor (see writeCapability's doc comment): every ancestor is opened
- * relative to the previously verified parent's own fd with O_NOFOLLOW, so a
- * symlink substituted into any ancestor at any point cannot redirect the
- * write. When that executor is unavailable on this platform, the write is
- * explicitly REFUSED — never silently downgraded to a path-based
- * check-then-write pretending to be equally safe.
- *
- * Outside-root targets use a narrower, separately documented fallback (see
- * writeFileCheckThenWrite).
- *
- * Preserves an existing file's permission bits on replacement in both
- * paths, and never truncates a hard-linked file's shared inode in place
- * (each path lands via a fresh file + atomic rename, not an in-place open).
+ * Convenience one-shot wrapper: prepares a permit and immediately executes
+ * it, back to back, with no async gap in between. Safe for tests and any
+ * direct (non-harness) caller that has no separate authorization step to
+ * bind against — but NOT what the write tool uses when running under the
+ * harness (see tools.ts), because a single synchronous call cannot express
+ * "authorize now, execute later after a Jev judgment or a human approval
+ * wait" — the exact gap R2/R3's prepareWritePermit/executeWritePermit split
+ * exists to close. Use prepareWritePermit + executeWritePermit directly
+ * whenever authorization and execution are genuinely separated in time.
  */
 export function writeFileVerified(root: string, target: string, content: string, options: WriteExecutorOptions = {}): WriteResult {
-  const canonicalRoot = realpathIfExists(root); // root is operator-configured and trusted; safe to realpath once, unlike a tool-argument-supplied target.
-  const absLexical = absoluteLexicalPath(canonicalRoot, target);
-  const components = componentsUnderRoot(canonicalRoot, absLexical);
-
-  if (components !== null && components.length > 0) {
-    const pythonBin = resolvePythonBin(options);
-    if (pythonBin === undefined) {
-      return {
-        ok: false,
-        reason:
-          'managed write capability unavailable on this platform (no working descriptor-relative write executor found — see README "Write safety"): refusing to write rather than using an unverified check-then-write path',
-      };
-    }
-    return runDescriptorRelativeWrite(pythonBin, canonicalRoot, components, content, options.expectedPreimageDigest ?? "-");
-  }
-
-  return writeFileCheckThenWrite(root, target, content, options.expectedPreimageDigest);
+  const prepared = prepareWritePermit(root, target, content, options.expectedPreimageDigest ?? "-");
+  if (!prepared.ok) return prepared;
+  return executeWritePermit(prepared.permit, content, options);
 }

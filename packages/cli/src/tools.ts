@@ -3,7 +3,7 @@ import { execFileSync, spawn } from "node:child_process";
 import { closeSync, fstatSync, openSync, readdirSync, readFileSync, readSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
-import { writeFileVerified } from "./paths";
+import { executeWritePermit, writeTargetKey, type WritePermit } from "./paths";
 
 const READ_CAP_BYTES = 100_000;
 const BASH_STREAM_CAP = 256_000;
@@ -20,14 +20,19 @@ export interface ToolDeps {
    * Side-channel keyed by toolCallId, set by the harness's gate right
    * before it allows a write to proceed (whether auto-approved or
    * human-approved) and consumed once here. Pi's beforeToolCall/execute
-   * contract has no other way to pass the digest a write was AUTHORIZED
-   * against into its own execute() call — toolCallId is the one identifier
-   * both sides already share. Binds the write's PREIMAGE through execution,
-   * the same way writeFileVerified's descriptor-relative executor already
-   * binds its TARGET through execution. Absent (no harness, or a direct
-   * caller) simply skips the preimage check.
+   * contract has no other way to pass the immutable, single-use
+   * authorization record (target/preimage/content identity — see
+   * WritePermit) a write was AUTHORIZED against into its own execute()
+   * call — toolCallId is the one identifier both sides already share.
+   *
+   * Absent (no harness, or a direct caller) means there is NO prepared
+   * authorization for this write, and execute() refuses outright — a
+   * missing permit must never silently become an unchecked managed write
+   * (R2/R3). A permit is consumed (deleted) on first use regardless of
+   * outcome, so it can never be replayed across a retry or an unrelated
+   * call with the same id.
    */
-  writePreconditions?: Map<string, string>;
+  writePermits?: Map<string, WritePermit>;
 }
 
 /** Bounded file read: reads at most `capBytes` from disk without loading the whole file, and never splits a UTF-8 sequence at the boundary. */
@@ -357,16 +362,24 @@ export function makeTools(deps: ToolDeps): AgentTool[] {
     parameters: writeParams,
     execute: async (id, params) => {
       // The tool IS the execution boundary for R2/R3, not a preflight
-      // recheck layered in front of one: writeFileVerified resolves and
-      // verifies the target through a descriptor-relative executor (when
-      // available) that a concurrent symlink swap cannot redirect, and — if
-      // the harness supplied one for this exact toolCallId — verifies the
-      // file's preimage digest inside that SAME verified boundary too. This
-      // runs even when the harness's own gate already checked the same
-      // thing, as defense in depth for direct callers.
-      const expectedPreimageDigest = deps.writePreconditions?.get(id);
-      deps.writePreconditions?.delete(id); // one-shot: never reused across retries or unrelated calls
-      const result = writeFileVerified(deps.cwd, params.path, params.content, { expectedPreimageDigest });
+      // recheck layered in front of one: it consumes an immutable, single-
+      // use WritePermit built at authorization time (see paths.ts) and
+      // verifies, at the moment of actual execution, that BOTH the
+      // requested target AND the requested content still match what that
+      // permit authorized — before ever handing off to the descriptor-
+      // relative executor, which independently re-verifies the filesystem
+      // identity (anchor + every intermediate component) the permit was
+      // built against. A missing, consumed, or mismatched permit refuses
+      // outright; it never falls back to an unverified write.
+      const permit = deps.writePermits?.get(id);
+      deps.writePermits?.delete(id); // one-shot: never reused across retries or unrelated calls
+      if (!permit) {
+        throw new Error("write blocked: no prepared authorization for this write (missing, already consumed, or not approved through the harness)");
+      }
+      if (writeTargetKey(deps.cwd, params.path) !== permit.targetKey) {
+        throw new Error("write blocked: target changed since authorization — the approved write no longer matches the requested path");
+      }
+      const result = executeWritePermit(permit, params.content);
       if (!result.ok) {
         throw new Error(`write blocked: ${result.reason}`);
       }

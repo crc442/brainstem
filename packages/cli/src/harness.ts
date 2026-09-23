@@ -37,7 +37,7 @@ import { CapabilityRegistry } from "./capabilities/registry";
 import { SelectDriver } from "./capabilities/select-policy";
 import { loadSkillsFromRoot } from "./capabilities/skills";
 import { ABSENT_DIGEST, changeSummaryForWrite } from "./change-summary";
-import { checkWriteTarget, isInside } from "./paths";
+import { checkWriteTarget, isInside, prepareWritePermit, type WritePermit } from "./paths";
 import { SessionRecorder } from "./session";
 import { makeTools } from "./tools";
 import { LocalArtifactStore } from "./output/artifact-store";
@@ -216,13 +216,14 @@ export function createHarness(options: HarnessOptions): Harness {
 
   // Keyed by toolCallId: set by the write gate flow below right before a
   // write is allowed to proceed (auto or approved), consumed once by the
-  // write tool's own execute() — see tools.ts's ToolDeps.writePreconditions
-  // doc comment for why this is the only channel available to bind a
-  // write's preimage through to execution.
-  const writePreconditions = new Map<string, string>();
+  // write tool's own execute() — see tools.ts's ToolDeps.writePermits doc
+  // comment for why this is the only channel available to bind a write's
+  // full authorized identity (target, content, preimage) through to
+  // execution.
+  const writePermits = new Map<string, WritePermit>();
 
   const tools: AgentTool[] = [
-    ...makeTools({ cwd: options.cwd, writePreconditions }),
+    ...makeTools({ cwd: options.cwd, writePermits }),
     ...makeRecoveryTools({ store: artifactStore }),
     makeDiscoveryTool({
       registry,
@@ -588,6 +589,16 @@ export function createHarness(options: HarnessOptions): Harness {
           }
         }
 
+        // Frozen ONCE, before any await (Jev, human approval) an attacker
+        // could mutate the live tool-call arguments within — the R3
+        // "changed_action" gap. Every downstream authorization artifact
+        // (change summary, approval request, and the WritePermit itself)
+        // binds to THESE values, never a later re-read of a.path/args.content,
+        // so execution can never end up consuming an action that was never
+        // actually shown to Jev or the human approver.
+        const authorizedPath = a.path ?? "";
+        const authorizedContent = (args as { content?: string } | undefined)?.content ?? "";
+
         // Computed once, right after the write target is verified, so
         // EVERY approval path below (outside-root static-floor ask, and the
         // normal Jev-decided ask) shows the same real diff/content summary
@@ -595,10 +606,37 @@ export function createHarness(options: HarnessOptions): Harness {
         // to reach Jev. A stale/missing prepared-action protection on one
         // branch was the R3 gap: identity/preimage checks must be uniform
         // across every way an approval can be requested.
-        const change =
-          toolCall.name === "write"
-            ? changeSummaryForWrite(options.cwd, a.path ?? "", (args as { content?: string } | undefined)?.content ?? "")
-            : undefined;
+        const change = toolCall.name === "write" ? changeSummaryForWrite(options.cwd, authorizedPath, authorizedContent) : undefined;
+
+        // Builds the ONE immutable, single-use record execute() will
+        // actually consume (see tools.ts's ToolDeps.writePermits doc
+        // comment): a permit that fails to prepare (e.g. the resolved
+        // parent is itself a symlink for an outside-root approval) is
+        // denied here, at the gate, rather than silently proceeding without
+        // one — a write must never reach execute() able to fall back to an
+        // unverified path.
+        const preparePermitOrDeny = (): { permit: WritePermit } | { block: true; reason: string } => {
+          const prepared = prepareWritePermit(options.cwd, authorizedPath, authorizedContent, change?.existingDigest ?? ABSENT_DIGEST);
+          if (!prepared.ok) {
+            const why = `write authorization could not be prepared: ${prepared.reason}`;
+            journal.append({
+              t: "decision",
+              v: 2,
+              ts: Date.now(),
+              reflex: "gate",
+              action: "deny",
+              reasons: [why],
+              staticVerdict: "deny",
+            });
+            options.onReflex?.(render("gate", "deny", [why]));
+            const reason = `[brainstem] denied: ${why}. Do not retry this command.`;
+            emitBlockedObservation(toolCallId, toolCall.name, args, reason, `gate deny: ${why}`);
+            return { block: true, reason };
+          }
+          writePermits.set(toolCallId, prepared.permit);
+          return { permit: prepared.permit };
+        };
+
         const writeApprovalPrepared = (): {
           target: string;
           changeSummary?: string;
@@ -629,21 +667,18 @@ export function createHarness(options: HarnessOptions): Harness {
           };
         };
 
-        // For a write: sets writePreconditions[toolCallId] to the digest the
-        // target's content was just verified to still match, immediately
-        // before allowing execution — the ONE channel the write tool's own
-        // execute() can read it back from (see tools.ts's ToolDeps doc
-        // comment). Consumed once by the descriptor-relative executor,
-        // binding the write's PREIMAGE through execution the same way its
-        // TARGET is bound through execution.
+        // On approval: builds and stores the WritePermit the write tool's
+        // own execute() will consume — the ONE channel it can read it back
+        // from (see tools.ts's ToolDeps doc comment). A permit that fails
+        // to prepare here (rare — e.g. the outside-root parent turned out
+        // to be a symlink) denies instead of leaving execute() with nothing.
         const runWriteApproval = async (
           reasons: string[],
         ): Promise<{ block: true; reason: string } | undefined> => {
           const result = await runApproval(toolCallId, toolCall.name, args, reasons, signal, writeApprovalPrepared());
-          if (result === undefined) {
-            writePreconditions.set(toolCallId, change?.existingDigest ?? ABSENT_DIGEST);
-          }
-          return result;
+          if (result !== undefined) return result;
+          const prepared = preparePermitOrDeny();
+          return "block" in prepared ? prepared : undefined;
         };
 
         // Literal containment is decided in code, never by a judgment: a write whose
@@ -691,18 +726,19 @@ export function createHarness(options: HarnessOptions): Harness {
           return await runApproval(toolCallId, toolCall.name, args, decision.reasons, signal, {});
         }
 
-        // "auto": bind execution to the target/preimage captured above. Jev
-        // evaluation is an await point — a write whose target or existing
-        // content changed WHILE that call was in flight (e.g. a parent
-        // directory swapped for a symlink mid-request, or the target file
-        // edited) must not silently proceed just because the semantic
+        // "auto": Jev evaluation is an await point — a write whose target
+        // or existing content changed WHILE that call was in flight (e.g. a
+        // parent directory swapped for a symlink mid-request, or the target
+        // file edited) must not silently proceed just because the semantic
         // judgment came back favorable for the ORIGINAL target. This closes
         // the same class of gap R3's approval recheck closes for the "ask"
         // path, for the "auto" path, where nothing else re-verifies
-        // anything between gate and execution. writePreconditions is set
-        // here too — the write tool's execute() binds its own descriptor-
-        // relative walk to the SAME preimage this recheck just confirmed,
-        // not just to a recheck result that execute() can never see.
+        // anything between gate and execution. The WritePermit built right
+        // after is what the write tool's own execute() actually consumes —
+        // this recheck only produces a cleaner, earlier deny message; the
+        // permit's own anchor-identity check (inside the descriptor-
+        // relative executor) is what closes the FURTHER window between this
+        // point and execute() actually running, which nothing here can see.
         if (toolCall.name === "write") {
           const recheck = writeApprovalPrepared().recheck();
           if (recheck.changed) {
@@ -721,7 +757,8 @@ export function createHarness(options: HarnessOptions): Harness {
             emitBlockedObservation(toolCallId, toolCall.name, args, reason, `gate deny: ${why}`);
             return { block: true, reason };
           }
-          writePreconditions.set(toolCallId, change?.existingDigest ?? ABSENT_DIGEST);
+          const prepared = preparePermitOrDeny();
+          if ("block" in prepared) return prepared;
         }
         return undefined;
       }

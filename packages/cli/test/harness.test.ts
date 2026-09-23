@@ -777,6 +777,225 @@ describe("harness integration", () => {
     expect(writeResult?.content[0]?.text).toContain("changed since approval was requested");
   });
 
+  test("R2 regression (third-pass, root_symlink): the PROJECT ROOT ITSELF — not just an intermediate ancestor — swapped for a symlink AFTER beforeToolCall returns is still caught", async () => {
+    dir = mkdtempSync(join(tmpdir(), "brainstem-harness-"));
+    const outsideDir = mkdtempSync(join(tmpdir(), "brainstem-harness-outside-"));
+    writeFileSync(join(dir, "file.txt"), "inside");
+    writeFileSync(join(outsideDir, "file.txt"), "outside");
+    const journalPath = join(dir, "journal.ndjson");
+
+    const mock = mockSystemOne((_state, questions): Record<string, Answer> => {
+      if ("contains_agent_directive" in questions) {
+        return {
+          contains_agent_directive: noulAnswer(0.01),
+          tries_to_override: noulAnswer(0.01),
+          requests_dangerous_action: noulAnswer(0.01),
+          severity: scoreAnswer(0.0, 0.9),
+          satisfies_intent: noulAnswer(0.9),
+          result_quality: scoreAnswer(2.0, 0.9),
+          evidence_of_success: noulAnswer(0.9),
+          operational_failure: noulAnswer(0.9),
+        };
+      }
+      return {
+        destructive: scoreAnswer(0, 0.9),
+        touches_credentials: noulAnswer(0.01),
+        exfiltrates: noulAnswer(0.01),
+        on_task: noulAnswer(0.99),
+        disposition: choiceAnswer("auto_run", 0.99, { auto_run: 0.99, ask_user: 0.005, deny: 0.005 }),
+      };
+    });
+
+    const harness = createHarness({
+      systemOne: mock,
+      streamFn: scriptedStream([
+        assistantMessage(
+          [{ type: "toolCall", id: "tc1", name: "write", arguments: { path: "file.txt", content: "escaped" } }],
+          "toolUse",
+        ),
+        assistantMessage([{ type: "text", text: "Done." }], "stop"),
+      ]),
+      model: { id: "m", api: "anthropic-messages" } as never,
+      trust: 0.3,
+      journalPath,
+      cwd: dir,
+      approvalHandler: async () => "approve_once",
+    });
+
+    const write = harness.agent.state.tools.find((t) => t.name === "write")!;
+    const originalExecute = write.execute.bind(write);
+    write.execute = async (id, params, signal, onUpdate) => {
+      // The ROOT itself — the trust anchor a re-realpath'd path string could
+      // silently follow through — is removed and replaced with a symlink to
+      // an outside directory containing a file of the SAME name, right
+      // before execute() runs. A recheck limited to intermediate ancestors
+      // (the earlier fix) would never look at the anchor itself.
+      rmSync(dir, { recursive: true, force: true });
+      symlinkSync(outsideDir, dir);
+      return originalExecute(id, params, signal, onUpdate);
+    };
+
+    await harness.prompt("update the file");
+
+    expect(readFileSync(join(outsideDir, "file.txt"), "utf8")).toBe("outside");
+    expect(harness.approvalsRequested()).toBe(0);
+    const transcript = harness.agent.state.messages;
+    const writeResult = transcript.find(
+      (m) => m.role === "toolResult" && (m as { toolCallId?: string }).toolCallId === "tc1",
+    ) as { isError: boolean; content: { text: string }[] } | undefined;
+    expect(writeResult?.isError).toBe(true);
+
+    rmSync(outsideDir, { recursive: true, force: true });
+    dir = ""; // already removed/replaced above; afterEach must not try to rmSync a symlink target it doesn't own
+  });
+
+  test("R3 regression (third-pass, changed_action): the tool call's OWN arguments — target and content — mutated AFTER an auto-approved gate decision are caught, not silently executed", async () => {
+    dir = mkdtempSync(join(tmpdir(), "brainstem-harness-"));
+    const outsideDir = mkdtempSync(join(tmpdir(), "brainstem-harness-outside-"));
+    writeFileSync(join(dir, "file.txt"), "inside");
+    writeFileSync(join(outsideDir, "file.txt"), "same");
+    const journalPath = join(dir, "journal.ndjson");
+
+    const mock = mockSystemOne((_state, questions): Record<string, Answer> => {
+      if ("contains_agent_directive" in questions) {
+        return {
+          contains_agent_directive: noulAnswer(0.01),
+          tries_to_override: noulAnswer(0.01),
+          requests_dangerous_action: noulAnswer(0.01),
+          severity: scoreAnswer(0.0, 0.9),
+          satisfies_intent: noulAnswer(0.9),
+          result_quality: scoreAnswer(2.0, 0.9),
+          evidence_of_success: noulAnswer(0.9),
+          operational_failure: noulAnswer(0.9),
+        };
+      }
+      return {
+        destructive: scoreAnswer(0, 0.9),
+        touches_credentials: noulAnswer(0.01),
+        exfiltrates: noulAnswer(0.01),
+        on_task: noulAnswer(0.99),
+        disposition: choiceAnswer("auto_run", 0.99, { auto_run: 0.99, ask_user: 0.005, deny: 0.005 }),
+      };
+    });
+
+    const harness = createHarness({
+      systemOne: mock,
+      streamFn: scriptedStream([
+        assistantMessage(
+          [{ type: "toolCall", id: "tc1", name: "write", arguments: { path: "file.txt", content: "escaped" } }],
+          "toolUse",
+        ),
+        assistantMessage([{ type: "text", text: "Done." }], "stop"),
+      ]),
+      model: { id: "m", api: "anthropic-messages" } as never,
+      trust: 0.3,
+      journalPath,
+      cwd: dir,
+      approvalHandler: async () => "approve_once",
+    });
+
+    const write = harness.agent.state.tools.find((t) => t.name === "write")!;
+    const originalExecute = write.execute.bind(write);
+    write.execute = async (id, params, signal, onUpdate) => {
+      // Authorization was built for {path:"file.txt", content:"escaped"} —
+      // the actual params object execute() is about to run against is
+      // mutated in place, right before that call, to an absolute outside
+      // path with different content. Approving one write must never
+      // authorize this.
+      const mutable = params as { path: string; content: string };
+      mutable.path = join(outsideDir, "file.txt");
+      mutable.content = "unapproved";
+      return originalExecute(id, params, signal, onUpdate);
+    };
+
+    await harness.prompt("update the file");
+
+    expect(readFileSync(join(outsideDir, "file.txt"), "utf8")).toBe("same");
+    expect(harness.approvalsRequested()).toBe(0);
+    const transcript = harness.agent.state.messages;
+    const writeResult = transcript.find(
+      (m) => m.role === "toolResult" && (m as { toolCallId?: string }).toolCallId === "tc1",
+    ) as { isError: boolean; content: { text: string }[] } | undefined;
+    expect(writeResult?.isError).toBe(true);
+    expect(writeResult?.content[0]?.text).toContain("target changed");
+
+    rmSync(outsideDir, { recursive: true, force: true });
+  });
+
+  test("R2/R3 regression (third-pass, outside_approved_target_swap): a human-APPROVED outside-root target's parent directory swapped for a symlink AFTER approval is caught by the same executor, not the old check-then-write fallback", async () => {
+    dir = mkdtempSync(join(tmpdir(), "brainstem-harness-"));
+    // Deliberately NOT under tmpdir(): DENY_WRITE_OUTSIDE_ROOT (floor.ts)
+    // denies writes resolving under /private/tmp outright (its own,
+    // unrelated static-floor protection), which would short-circuit this
+    // test before it ever reaches the "ask" path this test means to cover.
+    const scratch = mkdtempSync(join(process.cwd(), ".harness-test-scratch-"));
+    const approved = join(scratch, "approved");
+    const unapproved = join(scratch, "unapproved");
+    mkdirSync(approved);
+    mkdirSync(unapproved);
+    writeFileSync(join(approved, "file.txt"), "same");
+    writeFileSync(join(unapproved, "file.txt"), "same");
+    const journalPath = join(dir, "journal.ndjson");
+
+    const mock = mockSystemOne((_state, questions): Record<string, Answer> => {
+      if ("contains_agent_directive" in questions) {
+        return {
+          contains_agent_directive: noulAnswer(0.01),
+          tries_to_override: noulAnswer(0.01),
+          requests_dangerous_action: noulAnswer(0.01),
+          severity: scoreAnswer(0.0, 0.9),
+          satisfies_intent: noulAnswer(0.9),
+          result_quality: scoreAnswer(2.0, 0.9),
+          evidence_of_success: noulAnswer(0.9),
+          operational_failure: noulAnswer(0.9),
+        };
+      }
+      return {
+        destructive: scoreAnswer(0, 0.9),
+        touches_credentials: noulAnswer(0.01),
+        exfiltrates: noulAnswer(0.01),
+        on_task: noulAnswer(0.99),
+        disposition: choiceAnswer("auto_run", 0.99, { auto_run: 0.99, ask_user: 0.005, deny: 0.005 }),
+      };
+    });
+
+    const harness = createHarness({
+      systemOne: mock,
+      streamFn: scriptedStream([
+        assistantMessage(
+          [{ type: "toolCall", id: "tc1", name: "write", arguments: { path: join(approved, "file.txt"), content: "new" } }],
+          "toolUse",
+        ),
+        assistantMessage([{ type: "text", text: "Done." }], "stop"),
+      ]),
+      model: { id: "m", api: "anthropic-messages" } as never,
+      trust: 0.3,
+      journalPath,
+      cwd: dir,
+      approvalHandler: async () => "approve_once", // a real human reviewing THIS target, once
+    });
+
+    const write = harness.agent.state.tools.find((t) => t.name === "write")!;
+    const originalExecute = write.execute.bind(write);
+    write.execute = async (id, params, signal, onUpdate) => {
+      rmSync(approved, { recursive: true, force: true });
+      symlinkSync(unapproved, approved);
+      return originalExecute(id, params, signal, onUpdate);
+    };
+
+    await harness.prompt("update the approved file");
+
+    expect(harness.approvalsRequested()).toBe(1); // a human genuinely reviewed and approved THIS target
+    expect(readFileSync(join(unapproved, "file.txt"), "utf8")).toBe("same"); // never touched, despite the swap
+    const transcript = harness.agent.state.messages;
+    const writeResult = transcript.find(
+      (m) => m.role === "toolResult" && (m as { toolCallId?: string }).toolCallId === "tc1",
+    ) as { isError: boolean; content: { text: string }[] } | undefined;
+    expect(writeResult?.isError).toBe(true);
+
+    rmSync(scratch, { recursive: true, force: true });
+  });
+
   test("steer sees active capabilities and journals the model that actually served the request", async () => {
     dir = mkdtempSync(join(tmpdir(), "brainstem-harness-"));
     const journalPath = join(dir, "journal.ndjson");

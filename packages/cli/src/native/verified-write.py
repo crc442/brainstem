@@ -1,13 +1,22 @@
 #!/usr/bin/env python3
 """
-Scoped, isolated filesystem executor for R2 (see
+Scoped, isolated filesystem executor for R2/R3 (see
 docs/plans/2026-09-22-review-remediation.md). This is the ONLY thing that
-actually writes a file under a managed root: every intermediate path
+actually writes a file under a managed write: every intermediate path
 component is opened relative to the PREVIOUSLY VERIFIED parent directory's
 own file descriptor, using O_NOFOLLOW, so a symlink substituted into any
 ancestor directory AT ANY POINT before this process starts (or, for an
 already-open fd, after a component has been verified and descended into)
 cannot redirect the write to a different, attacker-chosen location.
+
+The TRUST ANCHOR itself — the directory every other component is walked
+relative to — is opened with O_NOFOLLOW too, and its device+inode identity
+is verified against what the caller captured at AUTHORIZATION time, before
+anything else happens. This closes the gap a plain "open the anchor path
+string" cannot: an anchor whose directory entry was replaced (by a symlink,
+OR by a different real directory with the same name) strictly AFTER
+authorization and strictly BEFORE this process runs is caught here, not
+assumed safe just because the string still resolves to *something*.
 
 This is deliberately narrow: it does exactly one thing (verify a path
 component-by-component via descriptor-relative syscalls, then atomically
@@ -17,10 +26,22 @@ which is the only caller and is responsible for validating that every
 argv component is a single path segment before invoking this script.
 
 Protocol:
-  argv: <root> <expected-preimage-digest-or-"-"> [<intermediate-component> ...] <final-component>
+  argv: <anchor> <expected-anchor-dev> <expected-anchor-ino> <expected-preimage-digest-or-"-"> [<intermediate-component> ...] <final-component>
   stdin: the raw bytes to write (read fully before any filesystem action)
   stdout on success: "OK <bytesWritten>"
   stderr + nonzero exit on failure: "<REASON_CODE>:<detail>"
+
+<anchor> is the caller's TRUST ANCHOR directory — the project root for an
+in-root write, or the deepest existing real ancestor directory of an
+approved outside-root target — captured and canonicalized by the caller at
+AUTHORIZATION time, never re-derived here. <expected-anchor-dev>/<ino> are
+that anchor's device and inode number at that same moment (decimal,
+arbitrary precision), verified against a fresh O_NOFOLLOW-opened fstat of
+the SAME path string immediately before anything else — this is what
+detects the anchor itself having been replaced (by a symlink, or by a
+different real directory) in the window between authorization and this
+process running, which a plain path-based re-open can never distinguish
+from "nothing changed."
 
 expected-preimage-digest is either "-" (skip the check), "absent" (the
 caller expects no file exists there yet), or a lowercase hex sha256 of the
@@ -29,11 +50,12 @@ chain, immediately before the write — never a separate, earlier, re-racable
 step — so a concurrent edit AND a concurrent symlink swap are both bound to
 execution by the same boundary.
 
-Exit codes: 2 root open failed, 3 a component is a symlink or non-directory,
-4 the final component is an existing symlink, 5 the final component exists
-but is not a regular file, 6 an argv component is not a single safe path
-segment, 7 unexpected OS error during the write/rename itself, 8 the
-existing content's digest did not match expected-preimage-digest.
+Exit codes: 2 anchor open or identity check failed, 3 an intermediate
+component is a symlink or non-directory, 4 the final component is an
+existing symlink, 5 the final component exists but is not a regular file,
+6 an argv component is not a single safe path segment, 7 unexpected OS
+error during the write/rename itself, 8 the existing content's digest did
+not match expected-preimage-digest, 9 malformed dev/ino argv values.
 
 Requires a platform where Python's `os` module supports dir_fd for open,
 mkdir, rename, and stat, and follow_symlinks=False for stat (verified by
@@ -69,12 +91,17 @@ def main():
         return
 
     args = sys.argv[1:]
-    if len(args) < 3:
-        fail(1, "USAGE: root expected_digest_or_dash [components...] final_name  (content on stdin)")
-    root = args[0]
-    expected_digest = args[1]
+    if len(args) < 5:
+        fail(1, "USAGE: anchor expected_dev expected_ino expected_digest_or_dash [components...] final_name  (content on stdin)")
+    anchor = args[0]
+    try:
+        expected_dev = int(args[1])
+        expected_ino = int(args[2])
+    except ValueError:
+        fail(9, "BAD_ANCHOR_IDENTITY:non-integer dev/ino argument")
+    expected_digest = args[3]
     final_name = args[-1]
-    components = args[2:-1]
+    components = args[4:-1]
 
     for comp in components + [final_name]:
         if not is_safe_component(comp):
@@ -83,11 +110,19 @@ def main():
     content = sys.stdin.buffer.read()
 
     try:
-        dir_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+        dir_fd = os.open(anchor, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     except OSError as e:
-        fail(2, "ROOT_OPEN_FAILED:%s" % e)
+        fail(2, "ANCHOR_OPEN_FAILED:%s" % e)
 
     try:
+        anchor_st = os.fstat(dir_fd)
+        if anchor_st.st_dev != expected_dev or anchor_st.st_ino != expected_ino:
+            fail(
+                2,
+                "ANCHOR_IDENTITY_MISMATCH:expected dev=%s ino=%s but found dev=%s ino=%s"
+                % (expected_dev, expected_ino, anchor_st.st_dev, anchor_st.st_ino),
+            )
+
         for comp in components:
             try:
                 st = os.stat(comp, dir_fd=dir_fd, follow_symlinks=False)

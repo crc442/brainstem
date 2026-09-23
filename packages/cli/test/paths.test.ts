@@ -6,7 +6,9 @@ import { contentHash } from "@brainstem/core";
 import {
   ABSENT_PREIMAGE_DIGEST,
   checkWriteTarget,
+  executeWritePermit,
   isInside,
+  prepareWritePermit,
   resolveParentForWrite,
   resolvePath,
   writeCapability,
@@ -298,12 +300,94 @@ describe("R2: descriptor-relative write executor — capability, execution bound
     expect(readFileSync(join(dir, "a", "b", "c", "leaf.txt"), "utf8")).toBe("héllo 🎉");
   });
 
-  test("an outside-root write still works via the documented narrower fallback (unaffected by the executor)", () => {
+  test("an outside-root write is executed through the SAME unified descriptor-relative executor, anchored to the approved target's own deepest existing parent", () => {
     dir = mkdtempSync(join(tmpdir(), "brainstem-paths-r2-"));
     const outsideDir = mkdtempSync(join(tmpdir(), "brainstem-paths-r2-outside2-"));
     const result = writeFileVerified(dir, join(outsideDir, "file.txt"), "outside write");
     expect(result.ok).toBe(true);
     expect(readFileSync(join(outsideDir, "file.txt"), "utf8")).toBe("outside write");
     rmSync(outsideDir, { recursive: true, force: true });
+  });
+
+  test("outside-root managed writes are also explicitly REFUSED (not degraded to an unverified path) when the executor is unavailable", () => {
+    dir = mkdtempSync(join(tmpdir(), "brainstem-paths-r2-"));
+    const outsideDir = mkdtempSync(join(tmpdir(), "brainstem-paths-r2-outside3-"));
+    const result = writeFileVerified(dir, join(outsideDir, "file.txt"), "content", {
+      pythonBinCandidates: ["definitely-not-a-real-interpreter-xyz"],
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toContain("unavailable");
+      expect(result.reason).toContain("refusing to write");
+    }
+    expect(existsSync(join(outsideDir, "file.txt"))).toBe(false);
+    rmSync(outsideDir, { recursive: true, force: true });
+  });
+
+  test("R2 regression (third-pass, root_symlink): the PROJECT ROOT ITSELF swapped for a symlink AFTER a permit was prepared is caught at execution, not just an intermediate ancestor", () => {
+    dir = mkdtempSync(join(tmpdir(), "brainstem-paths-r2-"));
+    const outsideDir = mkdtempSync(join(tmpdir(), "brainstem-paths-r2-outside-"));
+    writeFileSync(join(dir, "file.txt"), "inside");
+    writeFileSync(join(outsideDir, "file.txt"), "outside");
+
+    // Authorization happens FIRST, against the real root — prepareWritePermit
+    // captures the root's own device+inode identity here, before any swap.
+    const prepared = prepareWritePermit(dir, "file.txt", "escaped", ABSENT_PREIMAGE_DIGEST);
+    if (!prepared.ok) throw new Error(`setup failed: ${prepared.reason}`);
+
+    // The root itself — not merely an intermediate ancestor — is removed and
+    // replaced with a symlink to an outside directory containing a
+    // same-named file, strictly AFTER authorization.
+    rmSync(dir, { recursive: true, force: true });
+    symlinkSync(outsideDir, dir);
+
+    const result = executeWritePermit(prepared.permit, "escaped");
+    expect(result.ok).toBe(false);
+    expect(readFileSync(join(outsideDir, "file.txt"), "utf8")).toBe("outside");
+
+    rmSync(outsideDir, { recursive: true, force: true });
+    dir = ""; // already replaced with a symlink above; nothing left for afterEach to remove
+  });
+
+  test("R2 regression (third-pass, root_symlink): a real directory (not a symlink) swapped in under the root's own name is also caught, via anchor identity, not just symlink rejection", () => {
+    dir = mkdtempSync(join(tmpdir(), "brainstem-paths-r2-"));
+    writeFileSync(join(dir, "file.txt"), "inside");
+
+    const prepared = prepareWritePermit(dir, "file.txt", "escaped", ABSENT_PREIMAGE_DIGEST);
+    if (!prepared.ok) throw new Error(`setup failed: ${prepared.reason}`);
+
+    // A DIFFERENT real directory, not a symlink, now occupies the root's
+    // path — same name, different device+inode.
+    rmSync(dir, { recursive: true, force: true });
+    mkdirSync(dir);
+
+    const result = executeWritePermit(prepared.permit, "escaped");
+    expect(result.ok).toBe(false);
+    expect(existsSync(join(dir, "file.txt"))).toBe(false);
+  });
+
+  test("R2/R3 regression (third-pass, outside_approved_target_swap): an approved outside-root target's own parent swapped for a symlink AFTER authorization is caught by the same executor, not the old check-then-write fallback", () => {
+    dir = mkdtempSync(join(tmpdir(), "brainstem-paths-r2-"));
+    const approved = mkdtempSync(join(tmpdir(), "brainstem-paths-r2-approved-"));
+    const unapproved = mkdtempSync(join(tmpdir(), "brainstem-paths-r2-unapproved-"));
+    writeFileSync(join(approved, "file.txt"), "same");
+    writeFileSync(join(unapproved, "file.txt"), "same");
+
+    const target = join(approved, "file.txt");
+    const prepared = prepareWritePermit(dir, target, "new", ABSENT_PREIMAGE_DIGEST);
+    if (!prepared.ok) throw new Error(`setup failed: ${prepared.reason}`);
+    expect(prepared.permit.anchorPath).toBe(approved);
+
+    // The approved directory's OWN parent-level identity is swapped for a
+    // symlink to an unapproved sibling containing an identical initial file
+    // — content equality must never be treated as target-identity equality.
+    rmSync(approved, { recursive: true, force: true });
+    symlinkSync(unapproved, approved);
+
+    const result = executeWritePermit(prepared.permit, "new");
+    expect(result.ok).toBe(false);
+    expect(readFileSync(join(unapproved, "file.txt"), "utf8")).toBe("same");
+
+    rmSync(unapproved, { recursive: true, force: true });
   });
 });
