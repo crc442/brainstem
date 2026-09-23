@@ -17,6 +17,12 @@ The [live output-focus pilot](../research/2026-09-20-output-focus-pilot.md) comp
 
 RTK is a comparison baseline, not a filter library to replicate. This plan's new output intelligence is a generic Jev selection mechanism. The pilot does not establish superiority over native RTK wrappers, which were not tested.
 
+**2026-09-23 execution correction:** Commit-stage validation disproved the
+managed-write safety claims in the earlier notes above. The unsafe executor is
+removed and all managed writes explicitly report unavailable, as required by the
+[P1/P2 remediation plan](2026-09-22-review-remediation.md). This is a refusal
+fallback, not completion of a transactional write capability.
+
 ## 1. Product contract
 
 Brainstem is a coding-agent harness that uses Jev for bounded judgments about execution, results, progress, model selection, relevant capabilities, and which output evidence the current task needs.

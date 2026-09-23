@@ -1,42 +1,61 @@
 # Review remediation: P1 and P2 defects
 
-Date: 2026-09-22 (implemented); corrected after a first independent validation pass; corrected again after a second pass; corrected again after a third pass; corrected again after a FOURTH independent validation pass (see below).
+Updated: 2026-09-23.
 
-Status: Implemented and four times independently validated. Every one of the seven original findings is closed against its original acceptance criteria (see "R1-R7 evidence and status matrix" below for the finding-by-finding breakdown, including what is enforced, its regression coverage, and any genuine remaining blocker), with two explicitly, honestly scoped partial closures (R2's outside-anchor residual, R4's detached-daemon exclusion) — not weakened restatements of the original requirement, and not claimed as fully closed. R2/R3's execution-boundary guarantee now binds EVERY directory and the final file in the write's path — not just a trust anchor — through an authorization permit captured before any Jev/approval wait, verified on the descriptor the executor actually opens for each one. R4's process-containment guarantee does not, and cannot, cover a deliberately detached daemon — that remains out of scope by design, not by oversight.
+Status: The latest reproduced R6 pagination regression is fixed. R2/R3 use the
+original plan's explicit unavailable-capability fallback: all managed writes are
+refused before judgment/approval and again at direct execution. The unsafe write
+executor and its permit path have been removed. Safe managed writes are **not
+implemented**; restoring them remains a capability release gate. The original
+acceptance criteria below are unchanged.
 
-Review baseline: `d7c5d97`; implementation baseline: same working tree, no intervening commits before this work began.
+Review baseline: `d7c5d97`. Latest fixes follow validation of `dc1fb12`.
 
-## Implementation status
+Validation: `bun run test` — 445 passing tests across 39 files;
+`bun run typecheck` and `git diff --check` pass. The count replaces retired
+executor-success tests with refusal/no-effect tests; no tests are skipped.
 
-All seven findings landed, following the delivery sequence below, with regression tests reproducing each defect against the pre-fix behavior (verified failing before the corresponding fix, per each commit's test additions) and passing after. `bun run test` (468 tests) and `bun run typecheck` pass at time of writing. See "R1-R7 evidence and status matrix" below for the acceptance-criteria-level breakdown; the table here is a summary.
+## Current evidence and status
 
-| ID | Outcome |
-|---|---|
-| R1 | Closed. One shared character boundary (`packages/core/src/presentation.ts`) is applied before Sanitize/Verify and delivery in both the CLI harness and the Pi adapter; error/thrown-tool-result text is reviewed identically to success text; non-text content is withheld with an explicit notice. The Pi adapter's pipeline order was corrected so Focus runs before Sanitize, matching the CLI harness. |
-| R2 | Closed, for in-root writes AND approved outside-root writes alike, via a real descriptor-relative (`openat`-style) executor. Every component in the write's path — the trust anchor, every intermediate directory, and the final file itself — has its device+inode identity verified on the descriptor the executor actually opens for it, against an expectation captured **before any Jev gate call or human approval wait**, never re-derived afterward — see "Fourth independent validation follow-up" below; this supersedes all three earlier passes' fixes (a preflight recheck; an executor whose anchor-open step still trusted the path string; an executor whose identity capture ran AFTER the wait it was supposed to precede). Explicitly **unavailable and refused**, not silently downgraded, for BOTH in-root and outside-root writes when no working interpreter is found for that executor (see README "Write safety") — this is the plan's own prescribed fallback, not an escape hatch for shipping something unsafe. One narrowly-scoped residual, honestly disclosed: for an outside-root target only, an ancestor *above* the chosen anchor being swapped after that anchor was already selected (the in-root anchor is always the project root itself, with nothing above it in scope, so no analogous gap exists there). |
-| R3 | Closed. Every managed write is bound to an immutable, single-use `WritePermit` (`packages/cli/src/paths.ts`) built once, **before any await**, and consumed exactly once at execution: a missing, already-consumed, or mismatched permit (target or content no longer matching what was authorized) refuses outright rather than falling back to an unverified write. This closes the third pass's `changed_action` reproduction (the tool call's own arguments mutated after approval), which neither the first pass's action-hash recheck (bounded to the human-approval window only) nor the second pass's bare preimage-digest map (which authenticated neither target nor content) could reach — and the fourth pass's finding that the permit's own identity capture was itself happening post-wait, not pre-wait as claimed. |
-| R4 | Partially closed, explicitly scoped. `bash` launches a managed POSIX process group and terminates the whole group (SIGTERM, grace, SIGKILL) with bounded pipe drainage, independently of whether the direct child (as opposed to the whole group) has already exited. Containment of a deliberately detached daemon (double-forked, `setsid`) is **not** claimed; that requires an outer sandbox, per the plan. Windows falls back to direct-child-only signalling. |
-| R5 | Closed. `bash` capture is bounded by a per-stream byte cap decoupled from the much smaller display budget; stdout/stderr are archived as separate named streams; `read` uses bounded streaming instead of load-then-clip; empty captures are preserved as empty artifacts. |
-| R6 | Closed. Recovery pagination no longer reuses the 2,000-character journal-excerpt cap; `read_output`/`search_output` route through the same review boundary as everything else, report truthful delivered ranges, and paginate a single oversized line by explicit UTF-8 byte range with guaranteed forward progress. `search_output` bounds its own page size — computed from the ACTUAL rendered header/notes/continuation text and shrinking the body to fit, never a fixed guessed reserve (see "Fourth independent validation follow-up" below) — reports truthful scan coverage even when internally clipped, never silently drops a match it actually found (even an oversized one), and never evaluates a regex against a character-offset fragment of a line. |
-| R7 | Closed. Artifacts are stored per `<journal-parent>/sessions/<sessionId>/artifacts`, stamped and validated by owning session on every read, with malformed/foreign ids rejected before path derivation and a bounded tombstone retention horizon. |
+| Finding | Enforced behavior | Evidence / remaining boundary |
+|---|---|---|
+| R1 | Both adapters bound source text before review/delivery; failures are reviewed and non-text output is withheld. | `present.test.ts`, R1 cases in `harness.test.ts`, Pi `attach.test.ts`. |
+| R2 | Managed writes are unavailable on every current runtime, for all target paths. Refusal performs no staging, chmod, rename, or directory creation. | `paths.test.ts`, `tools.test.ts`, `harness.test.ts`. Restoring execution requires protected staging and an enforceable conditional commit; descriptor-relative traversal alone did not supply that. |
+| R3 | Write approval cannot enable the unavailable executor; no write approval is requested or consumed. Other approval lifecycle checks remain active. | `approval.test.ts` and `harness.test.ts`. The former write permit/approval path is retired, not presented as an enabled safe executor. |
+| R4 | POSIX managed groups receive TERM then KILL, with bounded pipe drainage even if the direct shell exits first. | Process tests in `tools.test.ts`. Deliberately detached daemons remain outside the stated contract; Windows supports direct-child cancellation only. |
+| R5 | Captures use independent byte budgets and per-stream completeness metadata before presentation. | Capture tests in `tools.test.ts`, `harness.test.ts`, artifact tests. |
+| R6 | Pages budget complete receipts and source bodies together; zero whole lines after receipt sizing trigger byte pagination. Search uses whole-line regex semantics. | `recovery-tools.test.ts`: exact reconstruction at 7,800, 7,900, 7,999, 8,000 and 8,001 characters, Unicode/non-default streams; delivered-continuation tests in `harness.test.ts`. |
+| R7 | Artifact storage, ownership checks, retention and tombstones are session-scoped. | `artifact-store.test.ts` session/foreign-id/malformed-id cases. |
 
-Deferred, not attempted in this increment (unchanged from the plan): the shared-runtime package extraction (`2026-09-22-runtime-consolidation.md`) and the product-validation benchmark (`2026-09-22-product-validation.md`).
+## Direct remediation after commit-stage validation (2026-09-23)
 
-## R1-R7 evidence and status matrix
+A controlled barrier after staging fsync reproduced an outside-file permission
+change through a substituted temporary symlink, and a concurrent target edit
+being overwritten after the preimage check. The helper still returned success.
+Its final path-based chmod and rename did not enforce the claimed commit contract.
+The supported POSIX operations in this backend provide no conditional replacement
+against an approved version. Another check-then-rename loop would not close it.
+The helper is removed; `writeCapability()` reports `unavailable`, the harness
+refuses before asking anyone, and direct execution also refuses. No weaker
+fallback or automatic shell retry is installed.
 
-Built against the ORIGINAL acceptance criteria in "Scope and release contract" and each finding's own "Acceptance" line below (not a restated, weaker version of them). "Enforced by" names the actual mechanism; "Regression coverage" names the test files that fail against the pre-fix behavior; "Remaining blocker" is genuine and explicit, or "None" if the acceptance criterion is fully met.
+The receipt fitter also regressed when a 7,999- or 8,000-character line fit the
+body budget but not its receipt. It delivered “lines 1–0” and repeated
+`startLine=1`. Byte-pagination selection now uses the final fitted page count.
+Boundary fixtures follow the displayed continuations and reconstruct the source.
 
-| ID | Enforced by | Regression coverage | Remaining blocker |
-|---|---|---|---|
-| R1 | One shared bound (`boundForReview`, `packages/core/src/presentation.ts`) applied before Sanitize/Verify in both `packages/cli/src/harness.ts`'s `afterToolCall` and `packages/pi-adapter/src/index.ts`; thrown tool errors go through the identical path as success text (`isError` never bypasses review); non-text content withheld with an explicit notice rather than silently passed or silently marked reviewed. | `packages/cli/test/present.test.ts`, `packages/cli/test/harness.test.ts` (R1-tagged tests), `packages/pi-adapter/test/attach.test.ts` (R1-tagged tests, including the Sanitize-after-Focus ordering regression from the first validation pass). | None. |
-| R2 | `packages/cli/src/paths.ts`'s `prepareWritePermit`/`executeWritePermit` plus `packages/cli/src/native/verified-write.py`: one resolver (`@brainstem/core`'s `resolvePath`/`isInside`) for policy and execution; symlink/parent-substitution rejection via descriptor-relative traversal with per-component identity binding; static floor applied to the canonical target before Jev; identity captured before any await, verified on the executor's own opened descriptors; hard-linked destinations replaced via verified-parent atomic rename (no in-place truncation); unavailable capability explicitly refused. | `packages/cli/test/paths.test.ts` (`R2` describe blocks — symlink/dangling-link/hardlink/permission fixtures, capability-unavailable fixtures, the fourth-pass root/intermediate-replacement and final-identity fixtures), `packages/cli/test/tools.test.ts` (`R2` describe block — direct-call defense in depth, missing/replayed-permit refusal), `packages/cli/test/harness.test.ts` (`R2`-tagged integration tests — symlink-during-gate, symlink/content-change-after-gate, third- and fourth-pass root/parent-replacement, outside-approved-target-swap). | Outside-root only: an ancestor above the chosen anchor swapped after that anchor was selected (see README "Write safety"). Bun/Node's lack of a native `openat` means the guarantee depends on a `python3`/`python` subprocess being available; where it is not, writes are refused (matches the plan's own prescribed outcome, not a gap against the acceptance criterion). |
-| R3 | `packages/cli/src/harness.ts`'s `actionIdentity`/`runApproval` (content digest+length in the action hash; defensive JSON-snapshot of validated args; recheck before consuming approval) plus the `WritePermit` immutable/single-use record (target, content digest, full directory-chain identity) consumed exactly once by `execute()`. | `packages/cli/test/approval.test.ts` (`R3` describe block — mutated args/cwd/target after request, approval-of-A-never-permits-B, denied/cancelled/no-handler cases), `packages/cli/test/harness.test.ts` (`R3`-tagged tests — the `changed_action` target/content-mutation regressions), `packages/cli/test/tools.test.ts` (direct target/content-mismatch-against-a-valid-permit tests). | None. |
-| R4 | `packages/cli/src/tools.ts`'s `bash` tool: POSIX process-group launch (`detached: true`), group-wide SIGTERM/grace/SIGKILL racing the direct child's own exit, bounded pipe drainage, a `kill(1)` fallback for Bun's `process.kill()` negative-pid bug. | `packages/cli/test/tools.test.ts` (`R4` describe block — parent/child/grandchild, SIGTERM-ignoring child, redirected-stdio backgrounded descendant, detached-descendant drain bound, cancellation-before-spawn, no-leaked-timers). | Deliberately detached daemons (double-forked, `setsid`) are not contained — explicitly out of scope per the plan; requires an outer sandbox/supervisor. Windows falls back to direct-child-only signalling (documented platform limitation, not process-tree cancellation). |
-| R5 | `packages/cli/src/tools.ts`'s `bash`/`read` capture path: per-stream byte cap decoupled from the display budget, separate named streams with documented ordering, bounded-streaming file reads, explicit `bytesObserved`/`bytesRetained`/`complete` per stream. | `packages/cli/test/tools.test.ts` (`R5`-tagged bash-capture tests), `packages/cli/test/harness.test.ts` (`R5`/`R1`+`R5` combined integration tests — huge output archived despite a bounded presented view, empty/stderr-only captures). | None. |
-| R6 | `packages/core/src/artifacts.ts`'s `searchContent` (whole-line-only regex evaluation, `unscannableLines` for lines beyond even the generous per-line ceiling) plus `packages/cli/src/output/recovery-tools.ts`'s `fitPageToBudget` (metadata measured from its own real rendered text, body shrunk to fit — never a fixed guessed reserve) and bounded caller-controlled labels (id/stream/pattern/unscannable-list). | `packages/core/test/artifacts.test.ts`, `packages/cli/test/recovery-tools.test.ts` (`R5/R6` and `R6` describe blocks — full-recovery/no-gap fixtures, mid-scan-cap and whole-line-ceiling fixtures, anchor/lookaround correctness, the fourth-pass combined scan-limit+oversized-match and long-pattern receipt-bounding fixtures), `packages/cli/test/harness.test.ts` (`R6`-tagged `afterToolCall`-boundary integration tests, including the fourth-pass delivered-continuation-follow tests). | None. |
-| R7 | `packages/cli/src/output/artifact-store.ts`'s `LocalArtifactStore`: session-scoped storage path, ownership stamped and validated on every read, malformed/foreign ids rejected before path derivation, bounded tombstone retention horizon distinguishing "unknown" from "expired". | `packages/cli/test/artifact-store.test.ts` (`R7` describe block — concurrent-session isolation, forged ownership, malformed ids, corrupt metadata, tombstone-horizon fixtures). | None. |
+Tests that asserted successful execution through the retired write backend are
+replaced by tests of the unavailable contract, including no filesystem effects
+for new/existing/outside/symlink/hardlink/directory targets and refusal despite
+approval handlers or repeated direct calls. They are not skipped or counted as
+proof of a transactional executor. Ordinary command approval tests remain.
 
-Test counts and describe-block names above reflect the test suite at the time of this fourth-pass update (`bun run test`: 468 tests, all passing); see each file directly for the current, authoritative set.
+## Historical validation notes
+
+The following dated notes describe earlier implementations. Their write-safety
+and completion claims were disproved or superseded by the commit-stage validation
+above; they are not the current release status. The original requirements after
+these notes remain the acceptance criteria for any future managed executor.
 
 ## Fourth independent validation follow-up (2026-09-22)
 

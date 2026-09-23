@@ -55,108 +55,40 @@ Approval permits that exact validated action once; denial, EOF, and cancellation
 execute nothing, and neither elapsed time nor an empty response approves. If the
 action changes between request and resolution, the approval is invalidated.
 
-The approval's identity (its `actionHash`) covers tool, canonical resolved
-target/cwd, all validated non-content arguments, and — for a write — a digest
-and byte length of the proposed content plus a digest of the file's existing
-content at request time. Approving a write with one payload never permits a
-different payload, and a file edited (or its target substituted) between
-request and resolution invalidates the approval instead of silently executing
-against whatever now sits at that path. The interactive approval prompt is
-shown the actual proposed diff/new-file summary, not just the command or path;
-the durable journal entry stays bounded (hash + reasons only).
+Approval identity includes the executable arguments; changing them while approval
+is pending invalidates the request. Managed file writes are currently unavailable
+and are rejected before requesting approval (see below).
 
 Without an approval handler (a non-interactive run), an `ask` returns a blocked
 tool result telling the agent to ask the user, and the CLI exits nonzero.
 
 ## Write safety
 
-Every managed write — in-root or an approved outside-root target alike — is
-executed by a real descriptor-relative (`openat`-style) filesystem executor
-(`packages/cli/src/native/verified-write.py`, invoked as a subprocess from
-`packages/cli/src/paths.ts`), not by a path-based check followed by a
-separate path-based write. It opens a **trust anchor directory** with
-`O_NOFOLLOW`, then walks each remaining path component — every intermediate
-directory, not just the anchor — relative to the *previously verified
-parent directory's own file descriptor*, also with `O_NOFOLLOW`, and only
-ever writes and renames within that final verified directory's fd. **Every
-component in that chain — the anchor, each intermediate directory, and the
-final file itself — has its device+inode identity verified on the
-descriptor the executor just opened for it**, against an expectation
-captured at authorization time, never against a later, separate path-based
-stat. A symlink substituted into any ancestor, or a *different real
-directory or file* swapped in under the same name anywhere in the chain
-(including the final file itself — a byte-for-byte identical replacement is
-still a different file and is rejected, not just a content mismatch),
-cannot redirect the write: identity is checked on the descriptor actually
-used, not re-derived from a path string. The same verified fd chain also
-checks the target's *current content* against a sha256 digest captured at
-authorization time, so a concurrent edit is rejected exactly like a
-concurrent identity swap. An existing file's permission bits are preserved
-onto the replacement.
+**Managed file writes are unavailable on all current runtimes.** The `write`
+tool returns an explicit unavailable error, and the CLI rejects it before
+calling the judge or asking for approval. Direct tool calls and the former
+`writeFileVerified` entry point also refuse without touching the filesystem.
+This applies to creating files and overwriting existing files, inside and outside
+the project. There is no interpreter override or approval that enables a weaker
+executor.
 
-What actually gets executed is bound by an **immutable, single-use
-authorization permit** (`WritePermit`, built by `prepareWritePermit`). This
-permit is captured exactly once, **before any await** — before the Jev gate
-judgment and before a human approval wait, not merely "early" in the
-handler — because building it any later, even "right after the gate/approval
-decision returns," would silently recapture whatever identity the
-filesystem has AT THAT LATER MOMENT and call it authorized, which is not
-authorization at all. (An earlier version of this fix made exactly that
-mistake — building the permit after the gate decision resolved — and an
-independent audit caught it: the "before any await" property has to hold
-for the call site, not just be asserted in a comment.) The permit fixes the
-target's canonical identity, the content's digest, and every directory and
-file identity in the chain down to the target; `executeWritePermit`
-consumes it exactly once, and the write tool's own `execute()` refuses
-outright — never falls back to an unverified write — if the toolCallId it's
-given has no permit (missing, already consumed, or the write never went
-through the harness's approval flow), if the requested target no longer
-matches what the permit authorized, or if the requested content no longer
-matches it either. Approving one write never authorizes a different target,
-different content, or a replayed permit.
+The former Python executor was removed after deterministic commit-stage tests
+showed two gaps: replacing its staging file with a symlink could change an outside
+file's permissions, and an edit arriving after its preimage check could be
+silently overwritten. Descriptor-relative traversal verified the opened path but
+did not provide an atomic “replace only this approved version” operation. Moving
+the check closer to rename would leave the same race.
 
-Neither Bun nor Node expose `openat`, so this executor is a `python3` (or
-`python`) subprocess — verified once per process to support the required
-`os.*(dir_fd=...)` operations, then cached. **If no such interpreter is
-available (or on Windows), managed writes are explicitly REFUSED** — in-root
-*and* outside-root alike — `writeCapability()` reports `"unavailable"` and
-every write attempt fails with a clear reason, rather than silently falling
-back to a path-based check-then-write that only looks equally safe. The
-original review remediation plan for R2 does not contain an escape hatch
-that permits an unsafe managed write to stay enabled; "unavailable" is that
-plan's own prescribed outcome, not a workaround for not having built the
-real thing.
+This implements the remediation plan's required unavailable-capability fallback.
+Restoring managed writes requires a transactional or isolated executor that
+protects staging and enforces the approved target/version through commit,
+including controlled races during staging and publication. The current refusal
+is not a claim that a safe write executor has been implemented.
 
-A write whose target resolves *outside* the configured project root already
-requires explicit interactive human approval every time (never
-auto-approved, unlike an in-root write) — but it is no longer a separately
-weaker code path. It goes through the SAME descriptor-relative executor,
-anchored to the deepest existing real directory on the way to the approved
-target (there is no single fixed anchor, like `/`, that could safely walk
-an arbitrary outside-root location without breaking on ordinary system
-symlinks such as macOS's `/tmp` → `/private/tmp`), so a symlink or
-different-real-directory swap of that anchor — even one performed strictly
-after a human approved the write — is caught the same way a root swap is.
-
-**Supported guarantee:** for both in-root and approved outside-root writes,
-a symlink or a different real directory/file substituted for the trust
-anchor, any intermediate directory in the chain, or the final target
-itself — or the target's content changed, or the tool call's own
-target/content mutated — at any point between authorization and this call,
-however long that window is (an in-flight Jev gate call, a human approval
-wait, or the residual gap after that decision returns but before the tool's
-own `execute()` runs, which no amount of *rechecking inside the gate hook*
-can ever reach on its own) is rejected, not silently followed. Equal file
-content is never treated as equal target identity, for a directory or for
-the final file. This is real, kernel-enforced descriptor-relative traversal
-bound to an authorization permit captured before the window it protects
-begins, not a second preflight check layered on top of ordinary path-based
-I/O. **Not claimed:** protection against an ancestor *above* the chosen
-anchor (relevant only to an outside-root target — the in-root anchor is the
-project root itself, with nothing above it in scope) being swapped after
-that anchor was already selected; and, as with any userspace security
-boundary, protection against compromise of the Python interpreter or the
-OS/kernel this executor itself depends on.
+`bash` remains a separate command tool with approval and process-group controls;
+it is not a filesystem sandbox and has no managed-write guarantee. The harness
+does not automatically retry refused writes through `bash`. The Pi adapter wraps
+externally supplied tools and likewise does not confer filesystem isolation.
 
 ## Managed process termination
 

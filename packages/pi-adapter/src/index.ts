@@ -50,14 +50,14 @@ function textOf(content: readonly { type: string; text?: string }[]): string {
  *
  * Filesystem contract limitation (R2): this package gates and sanitizes
  * whatever tools the CONSUMER supplies — it does not execute writes itself
- * and has no equivalent of packages/cli's symlink-rejecting, atomic
- * write-verification path (packages/cli/src/paths.ts). Wrapping a
+ * and supplies no filesystem isolation. The CLI currently refuses managed
+ * writes because its former executor could not enforce safe commit. Wrapping a
  * consumer-supplied write tool's beforeToolCall/afterToolCall hooks is a
  * preflight check on the ARGUMENTS Gate was shown, not an enforcement of how
  * that tool's own execute() actually opens the file — it cannot detect or
  * prevent that tool resolving a symlinked or substituted target after Gate
- * approved it. A consumer wanting that guarantee must either give their tool
- * an equivalent verified-write implementation or adopt the full CLI harness.
+ * approved it. A consumer wanting that guarantee needs an executor that
+ * enforces it through commit, or must refuse the write capability.
  */
 export function attachReflexes(agent: Agent, reflexes: Reflexes, options: AttachReflexesOptions): void {
   const capturedTools = options.capturedTools ?? DEFAULT_CAPTURED_TOOLS;

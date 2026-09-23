@@ -3,7 +3,7 @@ import { execFileSync, spawn } from "node:child_process";
 import { closeSync, fstatSync, openSync, readdirSync, readFileSync, readSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
-import { executeWritePermit, writeTargetKey, type WritePermit } from "./paths";
+import { WRITE_UNAVAILABLE_REASON } from "./paths";
 
 const READ_CAP_BYTES = 100_000;
 const BASH_STREAM_CAP = 256_000;
@@ -16,23 +16,6 @@ export interface ToolDeps {
   killGraceMs?: number;
   /** Extra bound on waiting for stdio pipes to close after SIGKILL, so a lingering descendant cannot hang the tool call. */
   drainGraceMs?: number;
-  /**
-   * Side-channel keyed by toolCallId, set by the harness's gate right
-   * before it allows a write to proceed (whether auto-approved or
-   * human-approved) and consumed once here. Pi's beforeToolCall/execute
-   * contract has no other way to pass the immutable, single-use
-   * authorization record (target/preimage/content identity — see
-   * WritePermit) a write was AUTHORIZED against into its own execute()
-   * call — toolCallId is the one identifier both sides already share.
-   *
-   * Absent (no harness, or a direct caller) means there is NO prepared
-   * authorization for this write, and execute() refuses outright — a
-   * missing permit must never silently become an unchecked managed write
-   * (R2/R3). A permit is consumed (deleted) on first use regardless of
-   * outcome, so it can never be replayed across a retry or an unrelated
-   * call with the same id.
-   */
-  writePermits?: Map<string, WritePermit>;
 }
 
 /** Bounded file read: reads at most `capBytes` from disk without loading the whole file, and never splits a UTF-8 sequence at the boundary. */
@@ -358,35 +341,12 @@ export function makeTools(deps: ToolDeps): AgentTool[] {
   const write: AgentTool<typeof writeParams> = {
     name: "write",
     label: "Write File",
-    description: "Create or overwrite a file with the given content.",
+    description: "Unavailable: this runtime cannot safely commit managed file writes. Do not use this tool to create or overwrite files.",
     parameters: writeParams,
-    execute: async (id, params) => {
-      // The tool IS the execution boundary for R2/R3, not a preflight
-      // recheck layered in front of one: it consumes an immutable, single-
-      // use WritePermit built at authorization time (see paths.ts) and
-      // verifies, at the moment of actual execution, that BOTH the
-      // requested target AND the requested content still match what that
-      // permit authorized — before ever handing off to the descriptor-
-      // relative executor, which independently re-verifies the filesystem
-      // identity (anchor + every intermediate component) the permit was
-      // built against. A missing, consumed, or mismatched permit refuses
-      // outright; it never falls back to an unverified write.
-      const permit = deps.writePermits?.get(id);
-      deps.writePermits?.delete(id); // one-shot: never reused across retries or unrelated calls
-      if (!permit) {
-        throw new Error("write blocked: no prepared authorization for this write (missing, already consumed, or not approved through the harness)");
-      }
-      if (writeTargetKey(deps.cwd, params.path) !== permit.targetKey) {
-        throw new Error("write blocked: target changed since authorization — the approved write no longer matches the requested path");
-      }
-      const result = executeWritePermit(permit, params.content);
-      if (!result.ok) {
-        throw new Error(`write blocked: ${result.reason}`);
-      }
-      return {
-        content: [{ type: "text", text: `wrote ${params.path} (${result.bytesWritten} bytes)` }],
-        details: { path: params.path, bytes: result.bytesWritten, resolvedTarget: result.resolvedTarget },
-      };
+    execute: async () => {
+      // Defense in depth for direct callers or agents without the CLI hook.
+      // No permit, approval, interpreter, or argument can enable this backend.
+      throw new Error(WRITE_UNAVAILABLE_REASON);
     },
   };
 
