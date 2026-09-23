@@ -70,66 +70,84 @@ tool result telling the agent to ask the user, and the CLI exits nonzero.
 
 ## Write safety
 
-Every in-root write — the common case, and the one that can be auto-approved
-without a human ever reviewing it — is executed by a real descriptor-relative
-(`openat`-style) filesystem executor
+Every managed write — in-root or an approved outside-root target alike — is
+executed by a real descriptor-relative (`openat`-style) filesystem executor
 (`packages/cli/src/native/verified-write.py`, invoked as a subprocess from
 `packages/cli/src/paths.ts`), not by a path-based check followed by a
-separate path-based write. It opens the canonical project root once, then
-walks each remaining path component relative to the *previously verified
-parent directory's own file descriptor* with `O_NOFOLLOW`, and only ever
-writes and renames within that final verified directory's fd. A symlink
-substituted into any ancestor — before this executor starts, or between two
-of its own component checks — cannot redirect the write, because the walk
-never re-resolves a path string from scratch and never follows a symlink it
-encounters. The same verified fd chain also checks (when the harness supplies
-one) that the target's *current content* still matches a sha256 digest
-computed at authorization time, so a concurrent edit is rejected exactly like
-a concurrent symlink swap — target and preimage are both bound through
-execution, not just checked beforehand. An existing file's permission bits
-are preserved onto the replacement.
+separate path-based write. It opens a **trust anchor directory** with
+`O_NOFOLLOW` and verifies that anchor's own device+inode identity against
+what was captured at authorization time — not merely that the path string
+still resolves to *something* — then walks each remaining path component
+relative to the *previously verified parent directory's own file descriptor*,
+also with `O_NOFOLLOW`, and only ever writes and renames within that final
+verified directory's fd. A symlink substituted into any ancestor — including
+the anchor itself — or a *different real directory* swapped in under the
+anchor's own name, cannot redirect the write: the walk never re-resolves a
+path string from scratch, never follows a symlink it encounters, and never
+trusts an anchor whose identity has changed. The same verified fd chain also
+checks (when the harness supplies one) that the target's *current content*
+still matches a sha256 digest computed at authorization time, so a concurrent
+edit is rejected exactly like a concurrent symlink swap. An existing file's
+permission bits are preserved onto the replacement.
+
+What actually gets executed is bound by an **immutable, single-use
+authorization permit** (`WritePermit`, built by `prepareWritePermit` at
+authorization time — before any await a Jev judgment or a human approval
+wait could let an attacker act within — and consumed exactly once by
+`executeWritePermit`). The permit fixes the target's canonical identity, the
+content's digest, the anchor's device+inode, and the preimage digest; the
+write tool's own `execute()` refuses outright — never falls back to an
+unverified write — if the toolCallId it's given has no permit (missing,
+already consumed, or the write never went through the harness's approval
+flow), if the requested target no longer matches what the permit authorized,
+or if the requested content no longer matches it either. Approving one write
+never authorizes a different target, different content, or a replayed
+permit.
 
 Neither Bun nor Node expose `openat`, so this executor is a `python3` (or
 `python`) subprocess — verified once per process to support the required
 `os.*(dir_fd=...)` operations, then cached. **If no such interpreter is
-available (or on Windows), in-root managed writes are explicitly REFUSED** —
-`writeCapability()` reports `"unavailable"` and every write attempt fails
-with a clear reason, rather than silently falling back to a path-based
-check-then-write that only looks equally safe. The original review
-remediation plan for R2 does not contain an escape hatch that permits an
-unsafe managed write to stay enabled; "unavailable" is that plan's own
-prescribed outcome, not a workaround for not having built the real thing.
+available (or on Windows), managed writes are explicitly REFUSED** — in-root
+*and* outside-root alike — `writeCapability()` reports `"unavailable"` and
+every write attempt fails with a clear reason, rather than silently falling
+back to a path-based check-then-write that only looks equally safe. The
+original review remediation plan for R2 does not contain an escape hatch
+that permits an unsafe managed write to stay enabled; "unavailable" is that
+plan's own prescribed outcome, not a workaround for not having built the
+real thing.
 
-A write whose target resolves *outside* the configured project root is a
-narrower, separately-scoped case: it already requires explicit interactive
-human approval every time (never auto-approved, unlike an in-root write), so
-the threat model it narrows is bounded by how long that approval takes to
-resolve, not by an unattended Jev decision. It falls back to a
-check-immediately-before-write + atomic same-directory rename (with the same
-preimage-digest check applied path-based), because no single trusted anchor
-exists for a full descriptor-relative walk from an arbitrary outside-root
-location without either breaking on ordinary system symlinks (macOS's `/tmp`
-→ `/private/tmp`, `/var` → `/private/var`) or reintroducing the exact gap the
-executor exists to close.
+A write whose target resolves *outside* the configured project root already
+requires explicit interactive human approval every time (never
+auto-approved, unlike an in-root write) — but it is no longer a separately
+weaker code path. It goes through the SAME descriptor-relative executor,
+anchored to the deepest existing real directory on the way to the approved
+target (there is no single fixed anchor, like `/`, that could safely walk
+an arbitrary outside-root location without breaking on ordinary system
+symlinks such as macOS's `/tmp` → `/private/tmp`), so a symlink or
+different-real-directory swap of that anchor — even one performed strictly
+after a human approved the write — is caught the same way a root swap is.
 
-**Supported guarantee (in-root writes, executor available):** a symlink
-substituted into any ancestor, or the target's content changed, at any point
-before this call — including while an earlier Jev gate call was still
-in flight, and including the window after that gate decision returns but
-before the tool's own `execute()` runs, which no amount of *rechecking
-inside the gate hook* can ever reach on its own — is rejected, not silently
-followed. This is real, kernel-enforced descriptor-relative traversal, not a
-second preflight check layered on top of ordinary path-based I/O.
-**Not claimed:** protection against a directory being replaced with a
-*different real directory* of the same name (as opposed to a symlink) in the
+**Supported guarantee:** for both in-root and approved outside-root writes,
+a symlink (or a different real directory) substituted for the trust anchor
+or any intermediate ancestor, the target's content changed, or the tool
+call's own target/content mutated, at any point before this call —
+including while an earlier Jev gate call or human approval wait was still in
+flight, and including the window after that decision returns but before the
+tool's own `execute()` runs, which no amount of *rechecking inside the gate
+hook* can ever reach on its own — is rejected, not silently followed. This
+is real, kernel-enforced descriptor-relative traversal bound to an
+authorization permit, not a second preflight check layered on top of
+ordinary path-based I/O. **Not claimed:** protection against an ancestor
+*above* the anchor (for an outside-root target only — the in-root anchor is
+the project root itself, with nothing above it in scope) being swapped after
+that anchor was already chosen; and protection against a directory being
+replaced with a *different real directory* of the same name in the
 sub-syscall gap between this executor's own successive `stat`-then-`open`
-calls for one ancestor — closing that specific, much narrower case would
-require the OS to expose atomic `O_NOFOLLOW`-verified-identity opens, which
-even `openat()` alone does not guarantee. **Not claimed either:** the
-outside-root fallback's guarantee is only as strong as its bounded
-check-then-write window, narrower than the in-root path by design (see
-above) — this is the documented, intentional scope boundary, not an
-oversight.
+calls for one already-descended-into intermediate ancestor (as opposed to
+the anchor, whose identity IS verified) — closing that specific, much
+narrower residual case would require the OS to expose atomic
+`O_NOFOLLOW`-verified-identity opens for every path segment, which even
+`openat()` alone does not guarantee.
 
 ## Managed process termination
 
@@ -194,7 +212,7 @@ Two always-available tools recover a capture without rerunning the command:
 
 ```
 read_output({ id, stream?, startLine, lineCount, startByteInLine? })
-search_output({ id, stream?, pattern, limit, startLine?, startCharInLine? })
+search_output({ id, stream?, pattern, limit, startLine? })
 ```
 
 Responses carry their real source ranges (or, for a single line too large for
@@ -221,12 +239,16 @@ evidence they actually found:
   actually scanned, not the full requested range). A single match whose own
   formatted line is too large to fit one page is never reported as "no
   matches" — it is delivered as a bounded, explicitly truncated preview with
-  a pointer to recover the full line via `read_output`. A scan cut off
-  *mid-line* by the internal scan cap (a single line long enough that the
-  cap lands before its terminating newline) resumes *within* that same line
-  via `startCharInLine`, instead of jumping to the next line and
-  permanently skipping the unscanned remainder — including any match
-  sitting in it.
+  a pointer to recover the full line via `read_output`.
+  A regex is never evaluated against a character-offset fragment of a
+  line — doing so silently breaks anchors (`^`/`$`), lookaround, and any
+  pattern spanning the cut point. A line already in progress when the scan
+  budget is reached is always finished to its own true end (bounded by a
+  much higher per-line ceiling, not the scan budget itself), so resuming is
+  always a clean line boundary. A line beyond even that higher ceiling is
+  reported as unscannable — undetermined, never as an absent match — with a
+  pointer to inspect it directly via `read_output`; scanning continues past
+  it rather than stalling.
 
 ## Focus rollout
 
