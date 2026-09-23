@@ -19,7 +19,8 @@
     "eval:with-without": "bun run experiments/evals/with-without-harness.ts",
     "eval:focus-vs-rtk": "bun run experiments/evals/focus-vs-rtk.ts",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit --incremental --tsBuildInfoFile .cache/typecheck.tsbuildinfo -p tsconfig.json"
+    "typecheck": "tsc --noEmit --incremental --tsBuildInfoFile .cache/typecheck.tsbuildinfo -p tsconfig.json",
+    "build": "tsdown"
   },
   "dependencies": {
     "@typesafe-ai/sdk": "^0.6.0"
@@ -28,7 +29,7 @@
     "@types/bun": "1.4.2",
     "typescript": "7.0.2",
     "vitest": "^3.2.0",
-    "tsup": "^8.5.1"
+    "tsdown": "0.23.0"
   },
   "trustedDependencies": [
     "@google/genai",

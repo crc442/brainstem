@@ -11,26 +11,25 @@
   "files": [
     "dist"
   ],
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
+  "main": "./dist/index.mjs",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.mts",
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
+      "types": "./dist/index.d.mts",
+      "default": "./dist/index.mjs"
     },
     "./judges/generic": {
-      "types": "./dist/judges/generic.d.ts",
-      "import": "./dist/judges/generic.js"
-    }
+      "types": "./dist/judges/generic.d.mts",
+      "default": "./dist/judges/generic.mjs"
+    },
+    "./package.json": "./package.json"
   },
   "scripts": {
-    "build": "tsup"
+    "prepack": "../../node_modules/.bin/tsdown --config ../../tsdown.config.ts --filter reflexes"
   },
   "dependencies": {
     "@brainstem/core": "^0.2.0",
     "@typesafe-ai/sdk": "^0.6.0"
-  },
-  "devDependencies": {
-    "tsup": "^8.5.1"
   }
 }
