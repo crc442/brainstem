@@ -416,7 +416,10 @@ describe("R6: search_output — cursor coverage and stream awareness", () => {
     expect(text1).toContain("1: MATCH");
     expect(text1).toContain("truncated");
     expect(text1).toContain("read_output with startLine=1");
-    expect(text1.length).toBeLessThan(8_000); // provider-visible receipt/page bound
+    // Fills the full review budget exactly rather than leaving slack — the
+    // preview is sized from the ACTUAL header/recovery/continuation text,
+    // so it uses every character it's safely entitled to.
+    expect(text1.length).toBeLessThanOrEqual(8_000); // provider-visible receipt/page bound
 
     // Full pagination terminates and still finds the match exactly once —
     // it must never be skipped by the continuation.
@@ -555,5 +558,100 @@ describe("R6: search_output — cursor coverage and stream awareness", () => {
     const id = putArtifact(store, { output: "content" });
     const result = (await searchOutput.execute("x", { id, pattern: "(unclosed" })) as { details: { outcome: string } };
     expect(result.details.outcome).toBe("invalid-pattern");
+  });
+
+  test("R6 regression (fourth pass, scan_bounded_match): a match combined with a scan-cap-clipped tail still fits the review boundary with its continuation and recovery pointer intact", async () => {
+    const { store, searchOutput } = setup();
+    // MATCH on line 1, immediately followed by 1,000,000 x's — the match
+    // itself needs the truncated-preview path AND the internal scan cap
+    // clips before reaching line 2 ("MATCH-later"). The earlier defect
+    // reserved a fixed 400 chars for header+notes+continuation+recovery
+    // combined and silently lost the continuation to a downstream 8,000-char
+    // cap once notes accumulated past that guess.
+    const content = `MATCH${"x".repeat(1_000_000)}\nMATCH-later`;
+    const id = putArtifact(store, { output: content });
+    const result = (await searchOutput.execute("x", { id, pattern: "MATCH" })) as {
+      content: { text: string }[];
+      details: { totalMatches: number; delivered: number };
+    };
+    const text = textOf(result);
+    expect(text.length).toBeLessThanOrEqual(8_000);
+    expect(text).toContain("truncated");
+    expect(text).toContain("read_output with startLine=1");
+    expect(text).toContain("continue with startLine=");
+
+    // Follow the DELIVERED continuation, not an assumed formula, to recover
+    // the second match.
+    const cont = text.match(/continue with startLine=(\d+)/);
+    expect(cont).not.toBeNull();
+    const second = (await searchOutput.execute("x", { id, pattern: "MATCH", startLine: Number(cont![1]) })) as {
+      content: { text: string }[];
+      details: { totalMatches: number };
+    };
+    expect(second.details.totalMatches).toBe(1);
+    expect(textOf(second)).toContain("MATCH-later");
+  });
+
+  test("R6 regression (fourth pass, long_pattern): an unusually long but valid regex still produces a receipt that fits the review boundary with its continuation and recovery pointer intact", async () => {
+    const { store, searchOutput } = setup();
+    const content = `MATCH${"x".repeat(9_000)}\nMATCH-later`;
+    const pattern = `${"(?:)".repeat(100)}MATCH`; // 405 chars, semantically just "MATCH"
+    const id = putArtifact(store, { output: content });
+    const result = (await searchOutput.execute("x", { id, pattern })) as {
+      content: { text: string }[];
+      details: { totalMatches: number };
+    };
+    const text = textOf(result);
+    expect(text.length).toBeLessThanOrEqual(8_000);
+    expect(text).toContain("truncated for display"); // the pattern itself is bounded in the header
+    expect(text).toContain("truncated");
+    expect(text).toContain("read_output with startLine=1");
+    const cont = text.match(/continue with startLine=(\d+)/);
+    expect(cont).not.toBeNull();
+    const second = (await searchOutput.execute("x", { id, pattern, startLine: Number(cont![1]) })) as {
+      details: { totalMatches: number };
+    };
+    expect(second.details.totalMatches).toBe(1);
+  });
+
+  test("R6: an artifact id and a caller-supplied stream label are bounded in error text, never embedded raw and unbounded", async () => {
+    const { store, searchOutput } = setup();
+    const id = putArtifact(store, { output: "content" });
+    const hugeStream = "s".repeat(50_000);
+    const result = (await searchOutput.execute("x", { id, stream: hugeStream, pattern: "content" })) as {
+      content: { text: string }[];
+      details: { outcome: string };
+    };
+    expect(result.details.outcome).toBe("unknown-stream");
+    expect(textOf(result).length).toBeLessThan(1_000);
+    expect(textOf(result)).toContain("truncated for display");
+  });
+
+  test("R6: an unscannable oversized line (beyond even the whole-line evaluation ceiling) is reported, not silently dropped, and scanning still finds the real match on the next line — all within the review boundary", async () => {
+    const { store, searchOutput } = setup();
+    // Default maxScanChars (1,000,000) gives an 8,000,000-char whole-line
+    // ceiling; this line exceeds even that.
+    const content = `${"z".repeat(8_000_001)}\nMATCH\ntail`;
+    const id = putArtifact(store, { output: content });
+    const result = (await searchOutput.execute("x", { id, pattern: "MATCH" })) as {
+      content: { text: string }[];
+      details: { totalMatches: number; unscannableLines: number[] };
+    };
+    const text = textOf(result);
+    expect(text.length).toBeLessThanOrEqual(8_000);
+    expect(result.details.unscannableLines).toEqual([1]);
+    expect(text).toContain("exceed the per-line search limit");
+    // The unscannable line's own huge length exhausts this call's scan
+    // budget before line 2 — never claimed as an absence, and the delivered
+    // continuation (not an assumed formula) still reaches the real match.
+    expect(result.details.totalMatches).toBe(0);
+    const cont = text.match(/continue with startLine=(\d+)/);
+    expect(cont).not.toBeNull();
+    const second = (await searchOutput.execute("x", { id, pattern: "MATCH", startLine: Number(cont![1]) })) as {
+      content: { text: string }[];
+      details: { totalMatches: number };
+    };
+    expect(second.details.totalMatches).toBe(1);
+    expect(textOf(second)).toContain("MATCH");
   });
 });
