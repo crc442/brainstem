@@ -430,12 +430,14 @@ describe("R6: search_output — cursor coverage and stream awareness", () => {
     expect(full).toBe(content);
   });
 
-  test("R6 regression: a scan cut off mid-line (not on a line boundary) resumes within that line instead of skipping its unscanned remainder", async () => {
-    const { store, searchOutput } = setup();
-    // A single huge first line whose match ("MATCH") sits entirely PAST
-    // where a small scan cap would cut it off mid-line — reproduces the
-    // second bug with a small, fast fixture via the maxScanChars override
-    // instead of a literal million-character one.
+  test("R6 regression: a line longer than the scan cap is still evaluated as one complete line, never a truncated fragment", async () => {
+    const { store } = setup();
+    // A single first line whose match ("MATCH") sits well past where a small
+    // scan cap would have cut a fragment — under the old fragment-based
+    // scan, page 1's slice never reached "MATCH" at all, and continuation
+    // (also fragment-based) risked splitting it further. The fix always
+    // finishes the line it's already in, regardless of the cap, bounded
+    // only by a much higher per-line ceiling (8x maxScanChars here = 1600).
     const content = `${"x".repeat(500)}MATCH\ntail`;
     const id = putArtifact(store, { output: content });
     const [, searchWithSmallCap] = makeRecoveryTools({ store, maxScanChars: 200 });
@@ -444,17 +446,71 @@ describe("R6: search_output — cursor coverage and stream awareness", () => {
       content: { text: string }[];
       details: { outcome: string; totalMatches: number };
     };
-    expect(first.details.totalMatches).toBe(0); // MATCH is beyond the 200-char scan window
-    const text1 = textOf(first);
-    expect(text1).toContain("mid-line");
-    const contMatch = text1.match(/startLine=(\d+), startCharInLine=(\d+)/);
-    expect(contMatch).not.toBeNull();
-    expect(Number(contMatch![1])).toBe(1); // still within line 1, not skipped to line 2
-    expect(Number(contMatch![2])).toBe(200);
+    expect(first.details.totalMatches).toBe(1);
+    expect(textOf(first)).toContain("1: ");
 
-    // Full pagination (using the SAME small cap) terminates and eventually finds it.
     const { lines } = await reconstructSearchMatches(searchWithSmallCap!, id, "MATCH", { maxPages: 20 });
     expect(lines).toEqual([1]);
+  });
+
+  test("R6 regression: a match split by the OLD fragment boundary is found once the whole line is evaluated together", async () => {
+    const { store } = setup();
+    const [, search] = makeRecoveryTools({ store, maxScanChars: 20 });
+    // The old scan sliced content.slice(0, 20) = 18 x's + "MA", splitting
+    // "MATCH" into "MA" | "TCH" across the boundary — neither half alone
+    // contains it, so it was silently never found. The fix never fragments
+    // a line: it evaluates the whole 23-char line together.
+    const content = `${"x".repeat(18)}MATCH\ntail`;
+    const id = putArtifact(store, { output: content });
+    const result = (await search!.execute("x", { id, pattern: "MATCH" })) as { details: { totalMatches: number } };
+    expect(result.details.totalMatches).toBe(1);
+  });
+
+  test("R6 regression: ^ is tested against the true start of the line, not a scan-boundary fragment that happens to begin with the match", async () => {
+    const { store } = setup();
+    const [, search] = makeRecoveryTools({ store, maxScanChars: 20 });
+    // The old mid-line resume, on its second page, scanned the REMAINDER of
+    // the line starting exactly at "MATCH" — ^MATCH falsely matched that
+    // fragment's own start, even though "MATCH" is not at the real line
+    // start. The fix never scans a fragment, so ^ only ever sees the truth.
+    const content = `${"x".repeat(20)}MATCH\ntail`;
+    const id = putArtifact(store, { output: content });
+    const result = (await search!.execute("x", { id, pattern: "^MATCH" })) as { details: { totalMatches: number } };
+    expect(result.details.totalMatches).toBe(0);
+  });
+
+  test("R6 regression: $ is tested against the true end of the line, not a scan-boundary fragment that happens to end after the match", async () => {
+    const { store } = setup();
+    const [, search] = makeRecoveryTools({ store, maxScanChars: 20 });
+    // The old scan's first-page fragment (content.slice(0,20)) ended right
+    // after "MATCH", before "TAIL" — MATCH$ falsely matched that fragment,
+    // even though the real line continues with "TAIL" and doesn't end there.
+    const content = `${"x".repeat(15)}MATCHTAIL\ntail`;
+    const id = putArtifact(store, { output: content });
+    const result = (await search!.execute("x", { id, pattern: "MATCH$" })) as { details: { totalMatches: number } };
+    expect(result.details.totalMatches).toBe(0);
+  });
+
+  test("R6: a line beyond even the whole-line evaluation ceiling is marked unscannable (undetermined, never absent), and scanning resumes past it", async () => {
+    const { store } = setup();
+    // maxScanChars=10 gives an 80-char whole-line ceiling (8x); a 100-char
+    // first line exceeds even that and cannot be safely evaluated at all —
+    // it must be disclosed, not silently treated as a non-match, and
+    // scanning must still reach the real match on line 2.
+    const [, search] = makeRecoveryTools({ store, maxScanChars: 10 });
+    const content = `${"z".repeat(100)}\nMATCH\ntail`;
+    const id = putArtifact(store, { output: content });
+
+    const first = (await search!.execute("x", { id, pattern: "MATCH" })) as {
+      content: { text: string }[];
+      details: { outcome: string; totalMatches: number; unscannableLines: number[] };
+    };
+    expect(first.details.totalMatches).toBe(0);
+    expect(first.details.unscannableLines).toEqual([1]);
+    expect(textOf(first)).toContain("exceed the per-line search limit");
+
+    const { lines } = await reconstructSearchMatches(search!, id, "MATCH", { maxPages: 20 });
+    expect(lines).toEqual([2]);
   });
 
   test("R6: search over Unicode content finds matches at the correct line and reconstructs the match text exactly", async () => {
