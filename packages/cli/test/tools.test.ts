@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { ABSENT_PREIMAGE_DIGEST, prepareWritePermit, type WritePermit } from "../src/paths";
 import { makeTools } from "../src/tools";
 
 let dir: string;
@@ -233,28 +234,80 @@ describe("R4: managed process group termination", () => {
 });
 
 describe("R2: write tool is itself a managed executor", () => {
-  test("refuses to write through a symlink, even called directly (not just via the harness gate)", async () => {
+  function permitFor(root: string, path: string, content: string): WritePermit {
+    const prepared = prepareWritePermit(root, path, content, ABSENT_PREIMAGE_DIGEST);
+    if (!prepared.ok) throw new Error(`test setup failed: ${prepared.reason}`);
+    return prepared.permit;
+  }
+
+  test("refuses to write with no prepared authorization at all — a missing permit is not an unchecked write", async () => {
+    dir = mkdtempSync(join(tmpdir(), "brainstem-tools-write-"));
+    const write = makeTools({ cwd: dir, writePermits: new Map() }).find((t) => t.name === "write")!;
+    await expect(write.execute("t1", { path: "new.txt", content: "attacker content" })).rejects.toThrow(/no prepared authorization/);
+    expect(existsSync(join(dir, "new.txt"))).toBe(false);
+  });
+
+  test("refuses to write through a symlink even with a valid, freshly-prepared permit (defense in depth, not just the gate)", async () => {
     dir = mkdtempSync(join(tmpdir(), "brainstem-tools-write-"));
     const outsideDir = mkdtempSync(join(tmpdir(), "brainstem-tools-write-outside-"));
     const outsideFile = join(outsideDir, "secret.txt");
     writeFileSync(outsideFile, "original");
     symlinkSync(outsideFile, join(dir, "link.txt"));
 
-    const write = makeTools({ cwd: dir }).find((t) => t.name === "write")!;
+    const writePermits = new Map([["t1", permitFor(dir, "link.txt", "attacker content")]]);
+    const write = makeTools({ cwd: dir, writePermits }).find((t) => t.name === "write")!;
     await expect(write.execute("t1", { path: "link.txt", content: "attacker content" })).rejects.toThrow(/symlink/);
     expect(readFileSync(outsideFile, "utf8")).toBe("original");
 
     rmSync(outsideDir, { recursive: true, force: true });
   });
 
-  test("an ordinary write succeeds and reports the resolved target", async () => {
+  test("a permit is single-use: a second execute() with the same toolCallId refuses instead of replaying it", async () => {
     dir = mkdtempSync(join(tmpdir(), "brainstem-tools-write-"));
-    const write = makeTools({ cwd: dir }).find((t) => t.name === "write")!;
+    const writePermits = new Map([["t1", permitFor(dir, "once.txt", "hello")]]);
+    const write = makeTools({ cwd: dir, writePermits }).find((t) => t.name === "write")!;
+    await write.execute("t1", { path: "once.txt", content: "hello" });
+    expect(readFileSync(join(dir, "once.txt"), "utf8")).toBe("hello");
+
+    await expect(write.execute("t1", { path: "once.txt", content: "again" })).rejects.toThrow(/no prepared authorization/);
+    expect(readFileSync(join(dir, "once.txt"), "utf8")).toBe("hello"); // unchanged by the replay attempt
+  });
+
+  test("an ordinary write succeeds and reports the resolved target, given a valid permit", async () => {
+    dir = mkdtempSync(join(tmpdir(), "brainstem-tools-write-"));
+    const writePermits = new Map([["t1", permitFor(dir, "sub/file.txt", "hello")]]);
+    const write = makeTools({ cwd: dir, writePermits }).find((t) => t.name === "write")!;
     const result = (await write.execute("t1", { path: "sub/file.txt", content: "hello" })) as {
       content: { text: string }[];
       details: { path: string; bytes: number; resolvedTarget: string };
     };
     expect(result.details.bytes).toBe(5);
     expect(readFileSync(join(dir, "sub", "file.txt"), "utf8")).toBe("hello");
+  });
+
+  test("R3 regression (changed_action): execute() called with a TARGET that no longer matches the permit refuses, even though the permit itself is otherwise valid", async () => {
+    dir = mkdtempSync(join(tmpdir(), "brainstem-tools-write-"));
+    const outsideDir = mkdtempSync(join(tmpdir(), "brainstem-tools-write-outside-"));
+    writeFileSync(join(outsideDir, "file.txt"), "same");
+    // Authorized for "file.txt" with content "approved", but execute() is
+    // called with a DIFFERENT absolute path — approval of one target must
+    // never authorize a different one, even with identical content.
+    const writePermits = new Map([["t1", permitFor(dir, "file.txt", "approved")]]);
+    const write = makeTools({ cwd: dir, writePermits }).find((t) => t.name === "write")!;
+    await expect(write.execute("t1", { path: join(outsideDir, "file.txt"), content: "approved" })).rejects.toThrow(/target changed/);
+    expect(readFileSync(join(outsideDir, "file.txt"), "utf8")).toBe("same");
+
+    rmSync(outsideDir, { recursive: true, force: true });
+  });
+
+  test("R3 regression (changed_action): execute() called with CONTENT that no longer matches the permit refuses, even though the target is unchanged", async () => {
+    dir = mkdtempSync(join(tmpdir(), "brainstem-tools-write-"));
+    // Authorized for content "approved", but execute() is called with
+    // different content at the SAME target — the write's own payload is
+    // part of what approval binds to, not just where it lands.
+    const writePermits = new Map([["t1", permitFor(dir, "file.txt", "approved")]]);
+    const write = makeTools({ cwd: dir, writePermits }).find((t) => t.name === "write")!;
+    await expect(write.execute("t1", { path: "file.txt", content: "unapproved" })).rejects.toThrow(/content no longer matches/);
+    expect(existsSync(join(dir, "file.txt"))).toBe(false);
   });
 });
