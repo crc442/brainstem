@@ -279,6 +279,25 @@ describe("R2: descriptor-relative write executor — capability, execution bound
     expect(readFileSync(join(dir, "surprise.txt"), "utf8")).toBe("appeared concurrently");
   });
 
+  test("R2/R3 regression (equivalent gap, fourth pass audit): a byte-identical replacement file (same content, different inode) is rejected — equal content is never treated as equal identity", () => {
+    dir = mkdtempSync(join(tmpdir(), "brainstem-paths-r2-"));
+    writeFileSync(join(dir, "file.txt"), "original");
+
+    const prepared = prepareWritePermit(dir, "file.txt", "new content", contentHash("original"));
+    if (!prepared.ok) throw new Error(`setup failed: ${prepared.reason}`);
+    expect(prepared.permit.finalIdentity.kind).toBe("exists");
+
+    // Swap for a DIFFERENT file object with the SAME content — the preimage
+    // digest alone would pass; only identity binding catches this.
+    rmSync(join(dir, "file.txt"), { force: true });
+    writeFileSync(join(dir, "file.txt"), "original");
+
+    const result = executeWritePermit(prepared.permit, "new content");
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toContain("changed since authorization");
+    expect(readFileSync(join(dir, "file.txt"), "utf8")).toBe("original");
+  });
+
   test("the descriptor-relative executor also preserves permissions and rejects a dangling final symlink", () => {
     dir = mkdtempSync(join(tmpdir(), "brainstem-paths-r2-"));
     const priv = join(dir, "priv.txt");
