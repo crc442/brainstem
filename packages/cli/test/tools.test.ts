@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { WRITE_UNAVAILABLE_REASON } from "../src/paths";
+import { prepareDemoWrite } from "../src/paths";
 import { makeTools } from "../src/tools";
 
 let dir: string;
@@ -233,22 +233,40 @@ describe("R4: managed process group termination", () => {
   });
 });
 
-describe("R2/R3: direct write execution cannot bypass unavailable capability", () => {
-  test("refuses new, existing, mutated and replayed calls without changing files", async () => {
-    dir = mkdtempSync(join(tmpdir(), "brainstem-write-unavailable-"));
-    const target = join(dir, "file.txt");
-    writeFileSync(target, "concurrent edit");
+describe("reference CLI write action binding", () => {
+  test("standalone demo tool writes files", async () => {
+    dir = mkdtempSync(join(tmpdir(), "brainstem-demo-write-"));
     const write = makeTools({ cwd: dir }).find((t) => t.name === "write")!;
-    expect(write.description).toContain("Unavailable");
-    for (const args of [
-      { path: "new.txt", content: "new" },
-      { path: "file.txt", content: "stale" },
-      { path: target, content: "mutated" },
-      { path: "file.txt", content: "stale" },
-    ]) {
-      await expect(write.execute("same-id", args)).rejects.toThrow(WRITE_UNAVAILABLE_REASON);
+    await write.execute("direct", { path: "file.txt", content: "hello" });
+    expect(readFileSync(join(dir, "file.txt"), "utf8")).toBe("hello");
+  });
+
+  test("CLI execution rejects missing, changed and consumed actions", async () => {
+    dir = mkdtempSync(join(tmpdir(), "brainstem-demo-write-"));
+    const approvedWrites = new Map();
+    const write = makeTools({ cwd: dir, approvedWrites }).find((t) => t.name === "write")!;
+    const args = { path: "file.txt", content: "approved" };
+    await expect(write.execute("missing", args)).rejects.toThrow(/no approved action/);
+    for (const mutation of [{ ...args, content: "changed" }, { ...args, path: "other.txt" }]) {
+      approvedWrites.set("changed", prepareDemoWrite(dir, args.path, args.content));
+      await expect(write.execute("changed", mutation)).rejects.toThrow(/arguments changed/);
+      expect(approvedWrites.has("changed")).toBe(false);
     }
-    expect(readFileSync(target, "utf8")).toBe("concurrent edit");
-    expect(existsSync(join(dir, "new.txt"))).toBe(false);
+    approvedWrites.set("once", prepareDemoWrite(dir, args.path, args.content));
+    await write.execute("once", args);
+    await expect(write.execute("once", args)).rejects.toThrow(/no approved action/);
+    expect(readFileSync(join(dir, "file.txt"), "utf8")).toBe("approved");
+    expect(existsSync(join(dir, "other.txt"))).toBe(false);
+  });
+
+  test("cancellation consumes the action without creating a file", async () => {
+    dir = mkdtempSync(join(tmpdir(), "brainstem-demo-write-"));
+    const approvedWrites = new Map([["cancel", prepareDemoWrite(dir, "file.txt", "approved")]]);
+    const write = makeTools({ cwd: dir, approvedWrites }).find((t) => t.name === "write")!;
+    const controller = new AbortController();
+    controller.abort();
+    await expect(write.execute("cancel", { path: "file.txt", content: "approved" }, controller.signal)).rejects.toThrow(/cancelled/);
+    expect(approvedWrites.size).toBe(0);
+    expect(existsSync(join(dir, "file.txt"))).toBe(false);
   });
 });

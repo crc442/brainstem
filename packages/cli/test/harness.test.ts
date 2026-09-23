@@ -389,38 +389,55 @@ describe("harness integration", () => {
 
     expect(bashRuns).toBe(2);
   });
-  test.each(["file.txt", "new/deep/file.txt", "../outside.txt"])("unavailable write %s is blocked before judgment or approval and reported to the model", async (path) => {
-    dir = mkdtempSync(join(tmpdir(), "brainstem-write-unavailable-"));
-    const root = join(dir, "repo");
-    mkdirSync(root);
-    writeFileSync(join(root, "file.txt"), "original");
-    writeFileSync(join(dir, "outside.txt"), "outside");
-    let judgments = 0;
-    let approvals = 0;
+  test("reference CLI writes the reviewed action and gives Gate the actual diff", async () => {
+    dir = mkdtempSync(join(tmpdir(), "brainstem-demo-write-"));
+    writeFileSync(join(dir, "file.txt"), "old\n");
+    const gateStates: unknown[] = [];
     const harness = createHarness({
-      systemOne: mockSystemOne(() => { judgments++; throw new Error("write must not reach judgment"); }),
+      systemOne: mockSystemOne((state, questions): Record<string, Answer> => {
+        if ("contains_agent_directive" in questions) return {
+          contains_agent_directive: noulAnswer(0), tries_to_override: noulAnswer(0), requests_dangerous_action: noulAnswer(0),
+          severity: scoreAnswer(0, 1), satisfies_intent: noulAnswer(1), result_quality: scoreAnswer(3, 1),
+          evidence_of_success: noulAnswer(1), operational_failure: noulAnswer(0),
+        };
+        gateStates.push(state);
+        return { destructive: scoreAnswer(0, 1), touches_credentials: noulAnswer(0), exfiltrates: noulAnswer(0),
+          on_task: noulAnswer(1), disposition: choiceAnswer("auto_run", 1, { auto_run: 1 }) };
+      }),
       streamFn: scriptedStream([
-        assistantMessage([{ type: "toolCall", id: "tc1", name: "write", arguments: { path, content: "replacement" } }], "toolUse"),
-        assistantMessage([{ type: "text", text: "Write unavailable." }], "stop"),
+        assistantMessage([{ type: "toolCall", id: "tc1", name: "write", arguments: { path: "file.txt", content: "new\n" } }], "toolUse"),
+        assistantMessage([{ type: "text", text: "Done." }], "stop"),
       ]),
-      model: undefined as never,
-      trust: 0.3,
-      journalPath: join(dir, "journal.ndjson"),
-      cwd: root,
-      approvalHandler: async () => { approvals++; return "approve_once"; },
+      model: undefined as never, trust: 0.3, journalPath: join(dir, "journal.ndjson"), cwd: dir,
     });
     await harness.prompt("Update the file");
-    expect(judgments).toBe(0);
-    expect(approvals).toBe(0);
+    expect(readFileSync(join(dir, "file.txt"), "utf8")).toBe("new\n");
     expect(harness.approvalsRequested()).toBe(0);
-    expect(readFileSync(join(root, "file.txt"), "utf8")).toBe("original");
-    expect(readFileSync(join(dir, "outside.txt"), "utf8")).toBe("outside");
-    expect(existsSync(join(root, "new"))).toBe(false);
+    expect(JSON.stringify(gateStates)).toContain("-old");
+    expect(JSON.stringify(gateStates)).toContain("+new");
+    const result = harness.agent.state.messages.find((m) => m.role === "toolResult") as { isError: boolean; content: { text: string }[] };
+    expect(result.isError).toBe(false);
+    expect(result.content[0]?.text).toContain("wrote file.txt");
+  });
+
+  test("secret writes remain denied before judgment or approval", async () => {
+    dir = mkdtempSync(join(tmpdir(), "brainstem-demo-write-"));
+    let asked = 0;
+    const harness = createHarness({
+      systemOne: mockSystemOne(() => { throw new Error("must not reach judge"); }),
+      streamFn: scriptedStream([
+        assistantMessage([{ type: "toolCall", id: "tc1", name: "write", arguments: { path: ".env", content: "secret" } }], "toolUse"),
+        assistantMessage([{ type: "text", text: "Denied." }], "stop"),
+      ]),
+      model: undefined as never, trust: 0.3, journalPath: join(dir, "journal.ndjson"), cwd: dir,
+      approvalHandler: async () => { asked++; return "approve_once"; },
+    });
+    await harness.prompt("Write .env");
+    expect(asked).toBe(0);
+    expect(existsSync(join(dir, ".env"))).toBe(false);
     const result = harness.agent.state.messages.find((m) => m.role === "toolResult") as { isError: boolean; content: { text: string }[] };
     expect(result.isError).toBe(true);
-    expect(result.content[0]?.text).toContain("managed write capability unavailable");
-    const journal = readFileSync(harness.journalPath, "utf8").trim().split("\n").map((line) => JSON.parse(line));
-    expect(journal.some((e) => e.t === "decision" && e.action === "deny" && e.reasons[0].includes("unavailable"))).toBe(true);
+    expect(result.content[0]?.text).toContain("static floor");
   });
 
   test("steer sees active capabilities and journals the model that actually served the request", async () => {

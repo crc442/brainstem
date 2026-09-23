@@ -1,15 +1,23 @@
 # brainstem
 
-A coding-agent harness where Jev (TypeSafe's System One model) makes bounded judgments — gate, sanitize, verify, pulse, steer — and the LLM only generates.
+A plugin layer that adds bounded System One judgments to a coding agent: assess proposed actions, review tool output, and guide the host agent's next step. Jev (TypeSafe's System One model) supplies judgments; the host agent owns execution.
 
 ## Who owns what
 
 | Owner | Responsibilities |
 |---|---|
-| Harness code | Execution, permissions, budgets, context assembly |
+| Host agent/runtime | Tool execution, filesystem permissions/isolation, approval UI, execution budgets |
+| Brainstem plugin | Judgment evidence, reflex policies, reviewed output, integration hooks |
 | Jev (System One) | Narrow semantic judgments over supplied evidence (gate/sanitize/verify/pulse/steer) |
 | Main model | Strategy, code, explanations |
 | User | Intent, constraints, approvals |
+
+
+`@brainstem/reflexes` exposes the judgment API. `@brainstem/pi-adapter` attaches
+it to tools owned by an existing Pi agent. `@brainstem/cli` is a runnable
+reference host demonstrating the integration; its local tools are not a sandbox
+or a transactional workspace product. A safe custom filesystem backend is not a
+prerequisite for using the plugin.
 
 ## Reflexes
 
@@ -21,7 +29,7 @@ What each reflex is shown is as much a part of the contract as what it decides:
 
 | Reflex | Evidence it receives |
 |---|---|
-| Gate | The real action — the command, or for a write a bounded diff (existing file) or first-40-lines summary (new file), flagged when the evidence is incomplete. The approval hash stays out of it. |
+| Gate | The reference CLI supplies the command or a bounded write diff/new-file summary, flagged when incomplete. The lightweight Pi adapter currently supplies command/path; hosts needing content-aware write judgments must supply change evidence through the reflex API. |
 | Sanitize / Verify | One bounded envelope: task, source, action summary, capped intent, status, truncation, and the exact content actually delivered — never a second independent slice of the raw capture. Reviewed regardless of `isError`: a thrown tool error's text gets the same review as any other output, not a bypass. The bound is one shared character cap (`packages/core/src/presentation.ts`, `REVIEW_CHAR_CAP` = 8,000 chars) applied once, before both Sanitize and delivery — a single very long line cannot exceed it either. |
 | Pulse | Recent actions with statuses, labelled repeat counts, failure fingerprints, and whether the approach changed — all computed in code. |
 | Steer | The latest completed observation and the active capability descriptions. |
@@ -32,7 +40,7 @@ Literal facts are never delegated: containment, counts, durations, exit codes an
 budgets are computed in code. A write resolving outside the project root skips
 Gate's judgment entirely and takes the static floor verdict.
 
-## Setup
+## Run the reference CLI
 
 ```sh
 bun install
@@ -56,39 +64,36 @@ execute nothing, and neither elapsed time nor an empty response approves. If the
 action changes between request and resolution, the approval is invalidated.
 
 Approval identity includes the executable arguments; changing them while approval
-is pending invalidates the request. Managed file writes are currently unavailable
-and are rejected before requesting approval (see below).
+is pending invalidates the request. In the reference CLI, a write approval shows
+the proposed diff and applies only to the captured path and content. Detected
+file changes during review invalidate the proposed write.
 
 Without an approval handler (a non-interactive run), an `ask` returns a blocked
 tool result telling the agent to ask the user, and the CLI exits nonzero.
 
-## Write safety
+## Reference CLI file writes
 
-**Managed file writes are unavailable on all current runtimes.** The `write`
-tool returns an explicit unavailable error, and the CLI rejects it before
-calling the judge or asking for approval. Direct tool calls and the former
-`writeFileVerified` entry point also refuse without touching the filesystem.
-This applies to creating files and overwriting existing files, inside and outside
-the project. There is no interpreter override or approval that enables a weaker
-executor.
+The CLI's `write` tool creates and replaces local files. It demonstrates the
+plugin workflow: prepare an action, apply static policy, ask System One for a
+judgment, request approval if needed, then execute the reviewed action.
 
-The former Python executor was removed after deterministic commit-stage tests
-showed two gaps: replacing its staging file with a symlink could change an outside
-file's permissions, and an edit arriving after its preimage check could be
-silently overwritten. Descriptor-relative traversal verified the opened path but
-did not provide an atomic “replace only this approved version” operation. Moving
-the check closer to rename would leave the same race.
+The CLI rejects final symlinks and non-regular targets, requires approval for
+allowed outside-project writes, and preserves static denials for sensitive
+paths. Execution checks the exact approved path/content, consumes that action
+once, and rejects file changes detected since review. Replacement uses private
+staging, descriptor-based permission changes, and rename; existing permissions
+are preserved and hard-linked copies are not modified in place.
 
-This implements the remediation plan's required unavailable-capability fallback.
-Restoring managed writes requires a transactional or isolated executor that
-protects staging and enforces the approved target/version through commit,
-including controlled races during staging and publication. The current refusal
-is not a claim that a safe write executor has been implemented.
+These are ordinary local-tool safeguards. Checks and rename are separate
+operations: an editor or another process can still change a file between them.
+The CLI does not promise transactional conflict detection or protection against
+hostile processes modifying its filesystem. Its `bash` tool also runs with the
+host user's permissions. Use the host's sandbox or other isolation when needed.
 
-`bash` remains a separate command tool with approval and process-group controls;
-it is not a filesystem sandbox and has no managed-write guarantee. The harness
-does not automatically retry refused writes through `bash`. The Pi adapter wraps
-externally supplied tools and likewise does not confer filesystem isolation.
+Plugin consumers keep their own executor, permission system, and concurrency
+policy. Attaching Brainstem does not replace those systems. The earlier
+[transactional backend proposal](docs/plans/2026-09-23-managed-write-backend.md)
+is deferred as a separate execution-product idea, not plugin release work.
 
 ## Managed process termination
 

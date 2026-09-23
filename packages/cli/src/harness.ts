@@ -35,7 +35,8 @@ import { makeDiscoveryTool } from "./capabilities/discovery";
 import { CapabilityRegistry } from "./capabilities/registry";
 import { SelectDriver } from "./capabilities/select-policy";
 import { loadSkillsFromRoot } from "./capabilities/skills";
-import { WRITE_UNAVAILABLE_REASON } from "./paths";
+import { checkDemoWrite, prepareDemoWrite, type PreparedDemoWrite } from "./paths";
+import { changeSummaryForWrite } from "./change-summary";
 import { SessionRecorder } from "./session";
 import { makeTools } from "./tools";
 import { LocalArtifactStore } from "./output/artifact-store";
@@ -212,8 +213,9 @@ export function createHarness(options: HarnessOptions): Harness {
   const registry = options.registry ?? new CapabilityRegistry();
   const driver = new SelectDriver({ registry, engine, minRefreshIntervalMs: 0 });
 
+  const approvedWrites = new Map<string, PreparedDemoWrite>();
   const tools: AgentTool[] = [
-    ...makeTools({ cwd: options.cwd }),
+    ...makeTools({ cwd: options.cwd, approvedWrites }),
     ...makeRecoveryTools({ store: artifactStore }),
     makeDiscoveryTool({
       registry,
@@ -553,16 +555,49 @@ export function createHarness(options: HarnessOptions): Harness {
       const toolCallId = toolCall.id;
 
       if (toolCall.name === "write") {
-        // Approval cannot supply a missing filesystem guarantee. Refuse
-        // before asking the judge or user, and also refuse inside execute.
-        journal.append({
-          t: "decision", v: 2, ts: Date.now(), reflex: "gate",
-          action: "deny", staticVerdict: "deny", reasons: [WRITE_UNAVAILABLE_REASON],
-        });
-        options.onReflex?.(render("gate", "deny", [WRITE_UNAVAILABLE_REASON]));
-        const reason = `[brainstem] ${WRITE_UNAVAILABLE_REASON}. Do not retry this write.`;
-        emitBlockedObservation(toolCallId, toolCall.name, args, reason, "managed write unavailable");
-        return { block: true, reason };
+        approvedWrites.delete(toolCallId);
+        const denyWrite = (why: string) => {
+          journal.append({ t: "decision", v: 2, ts: Date.now(), reflex: "gate", action: "deny", reasons: [why] });
+          options.onReflex?.(render("gate", "deny", [why]));
+          const reason = `[brainstem] write blocked: ${why}`;
+          emitBlockedObservation(toolCallId, toolCall.name, args, reason, why);
+          return { block: true as const, reason };
+        };
+        // Snapshot arguments and file state before either asynchronous judgment
+        // or approval. These checks are ordinary CLI safeguards, not isolation.
+        let prepared: PreparedDemoWrite;
+        try {
+          prepared = prepareDemoWrite(options.cwd, a.path ?? "", (args as { content: string }).content);
+        } catch {
+          return denyWrite("target must be an accessible regular file or a new file; symlinks are not writable");
+        }
+        const floor = staticVerdict("write", { path: prepared.target }, options.cwd);
+        if (floor === "deny") return denyWrite("static floor denies this target");
+        const change = changeSummaryForWrite(options.cwd, prepared.target, prepared.content);
+        const decision = floor === "ask"
+          ? { action: "ask", reasons: ["write outside project root requires approval"] }
+          : await timedJev(() => engine.gate({
+              tool: "write", task: taskText(), path: prepared.target,
+              changeSummary: change.changeSummary, evidenceIncomplete: change.evidenceIncomplete,
+            }));
+        options.onReflex?.(render("gate", decision.action, decision.reasons));
+        if (decision.action === "deny") return denyWrite(decision.reasons.join("; "));
+        if (decision.action === "ask") {
+          const blocked = await runApproval(toolCallId, "write", args, decision.reasons, signal, {
+            target: prepared.target,
+            changeSummary: change.changeSummary,
+            preconditionDigest: prepared.expectedState,
+            recheck: () => checkDemoWrite(prepared),
+          });
+          if (blocked) return blocked;
+        }
+        if (signal?.aborted) return denyWrite("cancelled");
+        const current = args as { path: string; content: string };
+        if (current.path !== prepared.path || current.content !== prepared.content) return denyWrite("arguments changed since review");
+        const checked = checkDemoWrite(prepared);
+        if (checked.changed) return denyWrite(checked.reason);
+        approvedWrites.set(toolCallId, prepared);
+        return undefined;
       }
 
       if (toolCall.name === "bash") {

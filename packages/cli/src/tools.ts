@@ -3,7 +3,7 @@ import { execFileSync, spawn } from "node:child_process";
 import { closeSync, fstatSync, openSync, readdirSync, readFileSync, readSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
-import { WRITE_UNAVAILABLE_REASON } from "./paths";
+import { executeDemoWrite, prepareDemoWrite, type PreparedDemoWrite } from "./paths";
 
 const READ_CAP_BYTES = 100_000;
 const BASH_STREAM_CAP = 256_000;
@@ -16,6 +16,8 @@ export interface ToolDeps {
   killGraceMs?: number;
   /** Extra bound on waiting for stdio pipes to close after SIGKILL, so a lingering descendant cannot hang the tool call. */
   drainGraceMs?: number;
+  /** When supplied by the CLI, execution requires the exact action the hook approved. */
+  approvedWrites?: Map<string, PreparedDemoWrite>;
 }
 
 /** Bounded file read: reads at most `capBytes` from disk without loading the whole file, and never splits a UTF-8 sequence at the boundary. */
@@ -341,12 +343,23 @@ export function makeTools(deps: ToolDeps): AgentTool[] {
   const write: AgentTool<typeof writeParams> = {
     name: "write",
     label: "Write File",
-    description: "Unavailable: this runtime cannot safely commit managed file writes. Do not use this tool to create or overwrite files.",
+    description: "Create or replace a local file. The reference CLI checks approval and stale contents; this tool is not a filesystem sandbox.",
     parameters: writeParams,
-    execute: async () => {
-      // Defense in depth for direct callers or agents without the CLI hook.
-      // No permit, approval, interpreter, or argument can enable this backend.
-      throw new Error(WRITE_UNAVAILABLE_REASON);
+    execute: async (id, params, signal) => {
+      const approved = deps.approvedWrites?.get(id);
+      deps.approvedWrites?.delete(id);
+      if (signal?.aborted) throw new Error("write cancelled");
+      if (deps.approvedWrites && !approved) throw new Error("write has no approved action (missing or already consumed)");
+      if (approved && (approved.path !== params.path || approved.content !== params.content)) {
+        throw new Error("write arguments changed since review");
+      }
+      // Direct users of the demo tools own their own permission checks, just
+      // as they do for bash. The CLI always supplies approvedWrites.
+      const result = executeDemoWrite(approved ?? prepareDemoWrite(deps.cwd, params.path, params.content));
+      return {
+        content: [{ type: "text", text: `wrote ${params.path} (${result.bytes} bytes)` }],
+        details: { path: params.path, bytes: result.bytes, resolvedTarget: result.target },
+      };
     },
   };
 
