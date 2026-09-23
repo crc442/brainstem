@@ -608,33 +608,49 @@ export function createHarness(options: HarnessOptions): Harness {
         // across every way an approval can be requested.
         const change = toolCall.name === "write" ? changeSummaryForWrite(options.cwd, authorizedPath, authorizedContent) : undefined;
 
-        // Builds the ONE immutable, single-use record execute() will
-        // actually consume (see tools.ts's ToolDeps.writePermits doc
-        // comment): a permit that fails to prepare (e.g. the resolved
-        // parent is itself a symlink for an outside-root approval) is
-        // denied here, at the gate, rather than silently proceeding without
-        // one — a write must never reach execute() able to fall back to an
-        // unverified path.
-        const preparePermitOrDeny = (): { permit: WritePermit } | { block: true; reason: string } => {
-          const prepared = prepareWritePermit(options.cwd, authorizedPath, authorizedContent, change?.existingDigest ?? ABSENT_DIGEST);
-          if (!prepared.ok) {
-            const why = `write authorization could not be prepared: ${prepared.reason}`;
-            journal.append({
-              t: "decision",
-              v: 2,
-              ts: Date.now(),
-              reflex: "gate",
-              action: "deny",
-              reasons: [why],
-              staticVerdict: "deny",
-            });
-            options.onReflex?.(render("gate", "deny", [why]));
-            const reason = `[brainstem] denied: ${why}. Do not retry this command.`;
-            emitBlockedObservation(toolCallId, toolCall.name, args, reason, `gate deny: ${why}`);
-            return { block: true, reason };
-          }
-          writePermits.set(toolCallId, prepared.permit);
-          return { permit: prepared.permit };
+        // R2/R3 (fourth independent validation pass): prepared HERE, before
+        // ANY await (the Jev gate call below, or a human approval wait) —
+        // never later. A prior version of this fix called prepareWritePermit
+        // AFTER the gate/approval decision returned, which looks equivalent
+        // but is not: prepareWritePermit captures live filesystem identity
+        // (the anchor's and every intermediate directory's device+inode),
+        // and capturing that identity after an await gives an attacker the
+        // entire await window to substitute a directory — real, same name,
+        // same content — before the "authorized" snapshot is even taken.
+        // The reproduction proved this precisely: the mock judge replaced
+        // the project root with a different real directory WHILE engine.gate
+        // was awaited, and the write still went through, because the old
+        // code's "pre-wait identity" was actually captured post-substitution.
+        // Preparing here, synchronously, before the Jev call below, closes
+        // that regardless of how long the gate/approval window turns out to
+        // be — a preflight recheck bounded to one specific window (during
+        // Jev, or during human approval) can never generalize the way a
+        // single pre-await capture does.
+        const preparedWrite = toolCall.name === "write" ? prepareWritePermit(options.cwd, authorizedPath, authorizedContent, change?.existingDigest ?? ABSENT_DIGEST) : undefined;
+        if (preparedWrite !== undefined && !preparedWrite.ok) {
+          const why = `write authorization could not be prepared: ${preparedWrite.reason}`;
+          journal.append({
+            t: "decision",
+            v: 2,
+            ts: Date.now(),
+            reflex: "gate",
+            action: "deny",
+            reasons: [why],
+            staticVerdict: "deny",
+          });
+          options.onReflex?.(render("gate", "deny", [why]));
+          const reason = `[brainstem] denied: ${why}. Do not retry this command.`;
+          emitBlockedObservation(toolCallId, toolCall.name, args, reason, `gate deny: ${why}`);
+          return { block: true, reason };
+        }
+
+        // Stores the SAME permit object prepared above — never a fresh one
+        // re-derived from post-await filesystem state — into the channel
+        // execute() reads from (see tools.ts's ToolDeps.writePermits doc
+        // comment). Called only once authorization (Jev auto, or a human
+        // approval) has actually concluded favorably.
+        const grantWritePermit = (): void => {
+          writePermits.set(toolCallId, (preparedWrite as { ok: true; permit: WritePermit }).permit);
         };
 
         const writeApprovalPrepared = (): {
@@ -667,18 +683,17 @@ export function createHarness(options: HarnessOptions): Harness {
           };
         };
 
-        // On approval: builds and stores the WritePermit the write tool's
-        // own execute() will consume — the ONE channel it can read it back
-        // from (see tools.ts's ToolDeps doc comment). A permit that fails
-        // to prepare here (rare — e.g. the outside-root parent turned out
-        // to be a symlink) denies instead of leaving execute() with nothing.
+        // On approval: stores the ALREADY-PREPARED WritePermit (captured
+        // pre-await, above) into the channel the write tool's own execute()
+        // reads from (see tools.ts's ToolDeps doc comment) — never builds a
+        // new one from the filesystem state at this (post-approval) moment.
         const runWriteApproval = async (
           reasons: string[],
         ): Promise<{ block: true; reason: string } | undefined> => {
           const result = await runApproval(toolCallId, toolCall.name, args, reasons, signal, writeApprovalPrepared());
           if (result !== undefined) return result;
-          const prepared = preparePermitOrDeny();
-          return "block" in prepared ? prepared : undefined;
+          grantWritePermit();
+          return undefined;
         };
 
         // Literal containment is decided in code, never by a judgment: a write whose
@@ -726,19 +741,18 @@ export function createHarness(options: HarnessOptions): Harness {
           return await runApproval(toolCallId, toolCall.name, args, decision.reasons, signal, {});
         }
 
-        // "auto": Jev evaluation is an await point — a write whose target
-        // or existing content changed WHILE that call was in flight (e.g. a
-        // parent directory swapped for a symlink mid-request, or the target
-        // file edited) must not silently proceed just because the semantic
-        // judgment came back favorable for the ORIGINAL target. This closes
-        // the same class of gap R3's approval recheck closes for the "ask"
-        // path, for the "auto" path, where nothing else re-verifies
-        // anything between gate and execution. The WritePermit built right
-        // after is what the write tool's own execute() actually consumes —
-        // this recheck only produces a cleaner, earlier deny message; the
-        // permit's own anchor-identity check (inside the descriptor-
-        // relative executor) is what closes the FURTHER window between this
-        // point and execute() actually running, which nothing here can see.
+        // "auto": the WritePermit was already captured, pre-await, above —
+        // it reflects what was there BEFORE the Jev call, not whatever is
+        // there now. The cheap path-based recheck below still catches the
+        // common case (something changed during the Jev await) with an
+        // early, clean deny message, but it is not what makes this safe:
+        // even if a swap happens to leave `recheck` unable to tell (e.g. a
+        // different real directory with byte-identical content — exactly
+        // what content equality being mistaken for identity equality looks
+        // like), the ALREADY-CAPTURED permit's own anchor/component identity
+        // checks (inside the descriptor-relative executor, at actual
+        // execute() time) are what actually close this window, however long
+        // it is — that recheck is redundant with them, not a substitute.
         if (toolCall.name === "write") {
           const recheck = writeApprovalPrepared().recheck();
           if (recheck.changed) {
@@ -757,8 +771,7 @@ export function createHarness(options: HarnessOptions): Harness {
             emitBlockedObservation(toolCallId, toolCall.name, args, reason, `gate deny: ${why}`);
             return { block: true, reason };
           }
-          const prepared = preparePermitOrDeny();
-          if ("block" in prepared) return prepared;
+          grantWritePermit();
         }
         return undefined;
       }

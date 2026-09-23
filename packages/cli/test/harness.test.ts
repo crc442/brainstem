@@ -2,11 +2,14 @@ import { afterEach, describe, expect, test } from "vitest";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { randomUUID } from "node:crypto";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { StreamFn } from "@earendil-works/pi-agent-core";
-import { mockSystemOne, choiceAnswer, noulAnswer, scoreAnswer, type Answer } from "@brainstem/core";
+import { mockSystemOne, choiceAnswer, noulAnswer, scoreAnswer, ARTIFACT_SCHEMA_VERSION, type Answer } from "@brainstem/core";
 import { createHarness } from "../src/harness";
+import { LocalArtifactStore } from "../src/output/artifact-store";
+import { makeRecoveryTools } from "../src/output/recovery-tools";
 
 const NO_USAGE = {
   input: 0,
@@ -1357,5 +1360,200 @@ describe("harness integration", () => {
     expect(delivered).toContain("page bounded");
     expect(delivered).toContain("continue with startLine=");
     expect(delivered.length).toBeLessThan(8_000);
+  });
+
+  test("R6 regression (fourth pass, multi-page): paging through search_output via its own DELIVERED continuation (not the raw tool response) recovers every match, still within the afterToolCall boundary each time", async () => {
+    dir = mkdtempSync(join(tmpdir(), "brainstem-harness-"));
+    const journalPath = join(dir, "journal.ndjson");
+
+    const mock = mockSystemOne((_state, questions): Record<string, Answer> => {
+      if ("contains_agent_directive" in questions) {
+        return {
+          contains_agent_directive: noulAnswer(0.01),
+          tries_to_override: noulAnswer(0.01),
+          requests_dangerous_action: noulAnswer(0.01),
+          severity: scoreAnswer(0.0, 0.9),
+          satisfies_intent: noulAnswer(0.9),
+          result_quality: scoreAnswer(2.0, 0.9),
+          evidence_of_success: noulAnswer(0.9),
+          operational_failure: noulAnswer(0.02),
+        };
+      }
+      return {
+        destructive: scoreAnswer(0, 0.9),
+        touches_credentials: noulAnswer(0.03),
+        exfiltrates: noulAnswer(0.02),
+        on_task: noulAnswer(0.95),
+        disposition: choiceAnswer("auto_run", 0.95, { auto_run: 0.95, ask_user: 0.04, deny: 0.01 }),
+      };
+    });
+
+    let currentScript: AssistantMessage[] = [];
+    let scriptIndex = 0;
+    const swappableStream: StreamFn = (model, context, opts) => {
+      const message = currentScript[Math.min(scriptIndex, currentScript.length - 1)]!;
+      scriptIndex += 1;
+      return scriptedStream([message])(model, context, opts);
+    };
+
+    const harness = createHarness({
+      systemOne: mock,
+      streamFn: swappableStream,
+      model: { id: "m", api: "anthropic-messages" } as never,
+      trust: 0.3,
+      journalPath,
+      cwd: dir,
+    });
+
+    scriptIndex = 0;
+    currentScript = [
+      assistantMessage(
+        [
+          {
+            type: "toolCall",
+            id: "tc1",
+            name: "bash",
+            arguments: {
+              // stderr, not stdout — also exercises a non-default stream
+              // through the same real capture path.
+              command: `for i in $(seq 0 29); do printf "MATCH-%s: " "$i"; printf 'x%.0s' $(seq 1 200); printf '\\n'; done 1>&2`,
+            },
+          },
+        ],
+        "toolUse",
+      ),
+      assistantMessage([{ type: "text", text: "produced." }], "stop"),
+    ];
+    await harness.prompt("Produce matches on stderr");
+    const journal = readFileSync(journalPath, "utf8").trim().split("\n").map((l) => JSON.parse(l));
+    const artifactId = journal.find((e) => e.t === "artifacts")!.artifactId as string;
+
+    const foundLines: number[] = [];
+    let startLine: number | undefined;
+    for (let page = 0; page < 20; page++) {
+      const toolCallId = `search-${page}`;
+      scriptIndex = 0;
+      currentScript = [
+        assistantMessage(
+          [
+            {
+              type: "toolCall",
+              id: toolCallId,
+              name: "search_output",
+              arguments: { id: artifactId, stream: "stderr", pattern: "^MATCH-", limit: 6, ...(startLine !== undefined ? { startLine } : {}) },
+            },
+          ],
+          "toolUse",
+        ),
+        assistantMessage([{ type: "text", text: "searched." }], "stop"),
+      ];
+      await harness.prompt(`search page ${page}`);
+      const transcript = harness.agent.state.messages;
+      const searchResult = transcript.find(
+        (m) => m.role === "toolResult" && (m as { toolCallId?: string }).toolCallId === toolCallId,
+      ) as { content: { text: string }[] } | undefined;
+      const delivered = searchResult?.content[0]?.text ?? "";
+      expect(delivered.length).toBeLessThan(8_000);
+      for (const m of delivered.matchAll(/^(\d+): MATCH-/gm)) foundLines.push(Number(m[1]));
+      const cont = delivered.match(/continue with startLine=(\d+)/);
+      if (!cont) break;
+      startLine = Number(cont[1]);
+    }
+    expect(foundLines).toEqual(Array.from({ length: 30 }, (_, i) => i + 1));
+  });
+
+  test("R6 regression (fourth pass): a single-call receipt combining a scan-cap-clipped tail with an oversized first match still fits the afterToolCall-delivered boundary, and following its continuation recovers the later match", async () => {
+    dir = mkdtempSync(join(tmpdir(), "brainstem-harness-"));
+    const journalPath = join(dir, "journal.ndjson");
+    const artifactsDir = mkdtempSync(join(tmpdir(), "brainstem-harness-fixture-artifacts-"));
+
+    // Built directly via a standalone artifact store/recovery-tools pair —
+    // real bash/read capture caps (256,000 / 100,000 bytes) are well below
+    // the 1,000,000-char scan cap this reproduction needs to exceed, so this
+    // mirrors exactly how the independent validation script itself
+    // constructs the fixture. afterToolCall itself only reads its `result`
+    // argument, so feeding it a result produced this way is a faithful test
+    // of the real provider-visible delivery boundary.
+    const store = new LocalArtifactStore(artifactsDir, "fixture-session");
+    const [, search] = makeRecoveryTools({ store });
+    const content = `MATCH${"x".repeat(1_000_000)}\nMATCH-later`;
+    const artifactId = `art_${randomUUID()}`;
+    store.put(
+      {
+        artifactId,
+        sessionId: "fixture-session",
+        schemaVersion: ARTIFACT_SCHEMA_VERSION,
+        toolCallId: "fixture",
+        tool: "read",
+        commandOrTarget: "fixture",
+        contentHash: "test",
+        byteCount: Buffer.byteLength(content),
+        lineCount: content.split("\n").length,
+        captureComplete: true,
+        createdAt: Date.now(),
+        streams: { output: { bytesObserved: Buffer.byteLength(content), bytesRetained: Buffer.byteLength(content), complete: true } },
+      },
+      { output: content },
+    );
+
+    const harness = createHarness({
+      systemOne: mockSystemOne((_state, questions): Record<string, Answer> => {
+        if ("contains_agent_directive" in questions) {
+          return {
+            contains_agent_directive: noulAnswer(0.01),
+            tries_to_override: noulAnswer(0.01),
+            requests_dangerous_action: noulAnswer(0.01),
+            severity: scoreAnswer(0.0, 0.9),
+            satisfies_intent: noulAnswer(0.9),
+            result_quality: scoreAnswer(2.0, 0.9),
+            evidence_of_success: noulAnswer(0.9),
+            operational_failure: noulAnswer(0.02),
+          };
+        }
+        return {
+          destructive: scoreAnswer(0, 0.9),
+          touches_credentials: noulAnswer(0.03),
+          exfiltrates: noulAnswer(0.02),
+          on_task: noulAnswer(0.95),
+          disposition: choiceAnswer("auto_run", 0.95, { auto_run: 0.95, ask_user: 0.04, deny: 0.01 }),
+        };
+      }),
+      streamFn: () => {
+        throw new Error("unused");
+      },
+      model: undefined as never,
+      trust: 0.3,
+      journalPath,
+      cwd: dir,
+    });
+
+    const args1 = { id: artifactId, pattern: "MATCH" };
+    const raw1 = await search!.execute("tc1", args1);
+    const delivered1 = await harness.agent.afterToolCall!({
+      toolCall: { id: "tc1", name: "search_output", arguments: args1 },
+      args: args1,
+      result: raw1,
+      isError: false,
+    } as never);
+    const text1 = ((delivered1 ?? raw1) as { content: { text?: string }[] }).content[0]?.text ?? "";
+    expect(text1.length).toBeLessThanOrEqual(8_000);
+    expect(text1).toContain("truncated");
+    expect(text1).toContain("read_output with startLine=1");
+    expect(text1).toContain("continue with startLine=");
+
+    const cont = text1.match(/continue with startLine=(\d+)/);
+    expect(cont).not.toBeNull();
+    const args2 = { id: artifactId, pattern: "MATCH", startLine: Number(cont![1]) };
+    const raw2 = await search!.execute("tc2", args2);
+    const delivered2 = await harness.agent.afterToolCall!({
+      toolCall: { id: "tc2", name: "search_output", arguments: args2 },
+      args: args2,
+      result: raw2,
+      isError: false,
+    } as never);
+    const text2 = ((delivered2 ?? raw2) as { content: { text?: string }[] }).content[0]?.text ?? "";
+    expect(text2).toContain("MATCH-later");
+
+    rmSync(artifactsDir, { recursive: true, force: true });
   });
 });

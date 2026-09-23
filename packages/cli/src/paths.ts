@@ -223,6 +223,38 @@ interface AnchorFound {
 }
 type AnchorResult = AnchorFound | { ok: false; reason: string };
 
+/**
+ * What was true of one intermediate directory (between the anchor and the
+ * final file) at AUTHORIZATION time: either it existed as a real directory
+ * with this identity, or it did not exist at all. Captured once, alongside
+ * the anchor's own identity, and verified again on the descriptor the
+ * executor actually opens for it — never a separate later path stat — so a
+ * directory swapped for a symlink OR a different real directory of the
+ * same name, at any point in the authorization-to-execution window however
+ * long it is, is caught the same way an anchor swap is. Equal file content
+ * at that path is never treated as equal identity.
+ */
+export type ComponentPrecondition = { name: string } & ({ kind: "exists"; dev: string; ino: string } | { kind: "missing" });
+
+/**
+ * Walks `components.slice(0, -1)` (every path segment strictly between the
+ * anchor and the final file) and records, for each, whether it existed as a
+ * real directory (with its identity) or was absent — at THIS moment, which
+ * the caller must invoke before any await. Refuses outright (never silently
+ * skips past) if an intermediate is currently a symlink or a non-directory.
+ */
+function captureIntermediatePreconditions(anchorPath: string, components: string[]): { ok: true; preconditions: ComponentPrecondition[] } | { ok: false; reason: string } {
+  const preconditions: ComponentPrecondition[] = [];
+  let probePath = anchorPath;
+  for (const name of components.slice(0, -1)) {
+    probePath = join(probePath, name);
+    const probe = probeAnchor(probePath);
+    if (probe.kind === "invalid") return { ok: false, reason: probe.reason };
+    preconditions.push(probe.kind === "missing" ? { name, kind: "missing" } : { name, kind: "exists", dev: probe.dev, ino: probe.ino });
+  }
+  return { ok: true, preconditions };
+}
+
 function anchorForInRoot(canonicalRoot: string, components: string[]): AnchorResult {
   const probe = probeAnchor(canonicalRoot);
   if (probe.kind === "missing") return { ok: false, reason: `refusing to write: project root "${canonicalRoot}" does not exist` };
@@ -279,6 +311,8 @@ export interface WritePermit {
   anchorDev: string;
   anchorIno: string;
   components: string[];
+  /** One entry per intermediate directory strictly between the anchor and the final file — i.e. components.slice(0, -1) — in descent order. */
+  intermediatePreconditions: ComponentPrecondition[];
   targetKey: string;
   contentDigest: string;
   preimageDigest: string;
@@ -290,8 +324,15 @@ export type PreparedWrite = { ok: true; permit: WritePermit } | { ok: false; rea
  * Builds a WritePermit from (root, target, content, preimageDigest) — call
  * this exactly ONCE, at authorization time, using values captured BEFORE
  * any await (a Jev judgment, a human approval wait) that an attacker could
- * act within. The resulting permit is inert data: nothing about it changes
- * if the caller's own `target`/`content` variables are mutated afterward.
+ * act within, and never again for the same authorization. The resulting
+ * permit is inert data: nothing about it changes if the caller's own
+ * `target`/`content` variables are mutated afterward, and — critically —
+ * calling this function again LATER (e.g. "after approval resolves, to
+ * build the real permit") would silently recapture whatever identity the
+ * filesystem has AT THAT LATER MOMENT and call it "authorized", which is
+ * not authorization at all. The anchor's identity AND every intermediate
+ * directory's identity (or absence) between it and the final file are
+ * captured here, once, together — see captureIntermediatePreconditions.
  */
 export function prepareWritePermit(root: string, target: string, content: string, preimageDigest: string): PreparedWrite {
   const canonicalRoot = realpathIfExists(root);
@@ -302,6 +343,8 @@ export function prepareWritePermit(root: string, target: string, content: string
       ? anchorForInRoot(canonicalRoot, inRootComponents)
       : anchorForOutsideRoot(absLexical);
   if (!anchor.ok) return anchor;
+  const preconditions = captureIntermediatePreconditions(anchor.anchorPath, anchor.components);
+  if (!preconditions.ok) return preconditions;
   return {
     ok: true,
     permit: {
@@ -309,6 +352,7 @@ export function prepareWritePermit(root: string, target: string, content: string
       anchorDev: anchor.anchorDev,
       anchorIno: anchor.anchorIno,
       components: anchor.components,
+      intermediatePreconditions: preconditions.preconditions,
       targetKey: absLexical,
       contentDigest: contentHash(content),
       preimageDigest,
@@ -320,6 +364,15 @@ function describeHelperFailure(status: number | null | undefined, stderr: string
   const trimmed = stderr.trim();
   if (trimmed.startsWith("SYMLINK_OR_NON_DIR:")) {
     return `refusing to write through a symlink or non-directory ancestor: ${trimmed.slice("SYMLINK_OR_NON_DIR:".length)}`;
+  }
+  if (trimmed.startsWith("COMPONENT_IDENTITY_MISMATCH:")) {
+    return `refusing to write: an intermediate directory changed since authorization (${trimmed.slice("COMPONENT_IDENTITY_MISMATCH:".length)})`;
+  }
+  if (trimmed.startsWith("COMPONENT_UNEXPECTEDLY_EXISTS:")) {
+    return `refusing to write: an intermediate directory expected to be created fresh already exists (${trimmed.slice("COMPONENT_UNEXPECTEDLY_EXISTS:".length)}) — possibly created after authorization`;
+  }
+  if (trimmed.startsWith("COMPONENT_OPEN_FAILED:")) {
+    return `refusing to write: an intermediate directory could not be opened without following a symlink (${trimmed.slice("COMPONENT_OPEN_FAILED:".length)})`;
   }
   if (trimmed.startsWith("FINAL_IS_SYMLINK:")) {
     return "refusing to write through a symlink: the final path component is a symlink, not a regular file";
@@ -345,11 +398,24 @@ function describeHelperFailure(status: number | null | undefined, stderr: string
 function runDescriptorRelativeWrite(pythonBin: string, permit: WritePermit, content: string): WriteResult {
   const finalName = permit.components[permit.components.length - 1]!;
   const intermediate = permit.components.slice(0, -1);
+  const preconditionArgs = permit.intermediatePreconditions.flatMap((p) =>
+    p.kind === "exists" ? ["E", p.dev, p.ino] : ["M", "-", "-"],
+  );
   let stdout: string;
   try {
     stdout = execFileSync(
       pythonBin,
-      [NATIVE_HELPER_PATH, permit.anchorPath, permit.anchorDev, permit.anchorIno, permit.preimageDigest, ...intermediate, finalName],
+      [
+        NATIVE_HELPER_PATH,
+        permit.anchorPath,
+        permit.anchorDev,
+        permit.anchorIno,
+        permit.preimageDigest,
+        String(intermediate.length),
+        ...preconditionArgs,
+        ...intermediate,
+        finalName,
+      ],
       {
         input: content,
         encoding: "utf8",
