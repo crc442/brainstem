@@ -78,15 +78,19 @@ function resolvePythonBin(options: WriteExecutorOptions): string | undefined {
  * (`packages/cli/src/native/verified-write.py`, invoked as a subprocess) is
  * available and is what actually performs every managed write, in-root or
  * approved outside-root alike: it opens the caller's TRUST ANCHOR directory
- * once — verifying its device+inode identity against what was captured at
- * authorization time, not just that the path string still resolves to
- * something — then walks each remaining path component relative to the
- * PREVIOUSLY VERIFIED parent directory's own file descriptor with
- * O_NOFOLLOW, so a symlink (or a different real directory swapped in under
- * the same name) substituted into any ancestor — at any point before or
- * during that walk — cannot redirect the write. This is the real
- * descriptor-relative/no-follow traversal-and-commit the plan requires, not
- * a second preflight check layered on top of ordinary path-based I/O.
+ * with O_NOFOLLOW, then walks each remaining path component — every
+ * intermediate directory, not just the anchor — relative to the PREVIOUSLY
+ * VERIFIED parent directory's own file descriptor, also with O_NOFOLLOW.
+ * EVERY component in that chain, including the final file, has its
+ * device+inode identity verified on the descriptor just opened for it
+ * against what was captured at authorization time — not just that a path
+ * string resolves to something, and not just checked once at the anchor.
+ * A symlink, or a different real directory/file swapped in under the same
+ * name anywhere in the chain — at any point before or during that walk —
+ * cannot redirect the write; equal content is never treated as equal
+ * identity. This is the real descriptor-relative/no-follow
+ * traversal-and-commit the plan requires, not a second preflight check
+ * layered on top of ordinary path-based I/O.
  *
  * "unavailable" means no such executor could be confirmed (no working
  * `python3`/`python` with the required `os.*(dir_fd=...)` support, or an
@@ -306,10 +310,13 @@ function anchorForInRoot(canonicalRoot: string, components: string[]): AnchorRes
  * This anchor is pinned only as deep as something already exists: a symlink
  * or non-directory found while walking up is refused outright (never
  * silently skipped past), but an ancestor ABOVE the chosen anchor that gets
- * swapped later is not covered by this mechanism — the same category of
- * narrow, documented residual as an in-root ancestor swap two or more
- * levels above an already-descended-into directory. See README "Write
- * safety".
+ * swapped later is not covered by this mechanism — an outside-root-only
+ * residual (the in-root anchor is always the project root itself, with
+ * nothing above it in scope, so no analogous gap exists there). Every
+ * component AT OR BELOW the anchor — intermediate directories and the
+ * final file alike — has its identity verified on the descriptor the
+ * executor opens for it, not just checked for symlink-ness. See README
+ * "Write safety".
  */
 function anchorForOutsideRoot(absLexical: string): AnchorResult {
   let dir = dirname(absLexical);
