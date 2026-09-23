@@ -2,34 +2,50 @@
 
 Updated: 2026-09-23.
 
-Status: The latest reproduced R6 pagination regression is fixed. R2/R3 use the
-original plan's explicit unavailable-capability fallback: all managed writes are
-refused before judgment/approval and again at direct execution. The unsafe write
-executor and its permit path have been removed. Safe managed writes are **not
-implemented**; restoring them remains a capability release gate. The original
-acceptance criteria below are unchanged.
+Status: Product scope clarified on 2026-09-23. Brainstem supplies judgments
+through a plugin; the host owns execution and isolation. The reference CLI once
+again supports ordinary local file writes. Its earlier unavailable fallback and
+the proposed transactional executor are superseded for this demo-host scope.
+We do not claim that the earlier hostile-concurrency filesystem requirements
+were implemented: they belong to a separately scoped executor product.
 
-The follow-up [managed write backend plan](2026-09-23-managed-write-backend.md)
-defines the ownership model, feasibility prototype and release gates for
-restoring a demonstrated write capability.
+The [managed write backend proposal](2026-09-23-managed-write-backend.md) is
+**deferred**, not a prerequisite for the plugin or shared judgment runtime.
 
-Review baseline: `d7c5d97`. Latest fixes follow validation of `dc1fb12`.
+Validation of the scope correction: 445 tests pass across 39 files, including
+successful CLI writes, approval/denial, outside-root approval, stale-file
+rejection, changed/replayed action rejection and cancellation. Typecheck and
+whitespace checks pass.
 
-Validation: `bun run test` — 445 passing tests across 39 files;
-`bun run typecheck` and `git diff --check` pass. The count replaces retired
-executor-success tests with refusal/no-effect tests; no tests are skipped.
+## Current evidence and ownership
 
-## Current evidence and status
-
-| Finding | Enforced behavior | Evidence / remaining boundary |
+| Finding | Current behavior | Owner / evidence |
 |---|---|---|
-| R1 | Both adapters bound source text before review/delivery; failures are reviewed and non-text output is withheld. | `present.test.ts`, R1 cases in `harness.test.ts`, Pi `attach.test.ts`. |
-| R2 | Managed writes are unavailable on every current runtime, for all target paths. Refusal performs no staging, chmod, rename, or directory creation. | `paths.test.ts`, `tools.test.ts`, `harness.test.ts`. Restoring execution requires protected staging and an enforceable conditional commit; descriptor-relative traversal alone did not supply that. |
-| R3 | Write approval cannot enable the unavailable executor; no write approval is requested or consumed. Other approval lifecycle checks remain active. | `approval.test.ts` and `harness.test.ts`. The former write permit/approval path is retired, not presented as an enabled safe executor. |
-| R4 | POSIX managed groups receive TERM then KILL, with bounded pipe drainage even if the direct shell exits first. | Process tests in `tools.test.ts`. Deliberately detached daemons remain outside the stated contract; Windows supports direct-child cancellation only. |
-| R5 | Captures use independent byte budgets and per-stream completeness metadata before presentation. | Capture tests in `tools.test.ts`, `harness.test.ts`, artifact tests. |
-| R6 | Pages budget complete receipts and source bodies together; zero whole lines after receipt sizing trigger byte pagination. Search uses whole-line regex semantics. | `recovery-tools.test.ts`: exact reconstruction at 7,800, 7,900, 7,999, 8,000 and 8,001 characters, Unicode/non-default streams; delivered-continuation tests in `harness.test.ts`. |
-| R7 | Artifact storage, ownership checks, retention and tombstones are session-scoped. | `artifact-store.test.ts` session/foreign-id/malformed-id cases. |
+| R1 | Bound supplied source text before review/delivery; review failures and withhold unsupported non-text content. | Plugin output pipeline; presentation, harness and Pi adapter tests. |
+| R2 | Demo writes resolve policy targets, reject final symlinks/special files, preserve modes and replace rather than truncate hard-linked files. No hostile-concurrency or conditional-commit guarantee. | Host execution responsibility. CLI `paths.test.ts` documents ordinary local-tool behavior. |
+| R3 | Demo approvals show the diff, bind exact arguments, consume an action once and reject detected stale contents. The plugin does not supply filesystem transactions. | Host approval integration; `approval.test.ts`, `tools.test.ts`, `harness.test.ts`. |
+| R4 | Reference CLI terminates managed POSIX groups and bounds pipe drainage. Deliberately detached processes and Windows tree containment are not claimed. | Host process lifecycle; `tools.test.ts`. |
+| R5 | Capture byte budgets and completeness metadata precede display limits. | Host capture integration; capture/artifact tests. |
+| R6 | Complete receipts and body share a budget; zero whole lines after receipt sizing trigger byte pagination. Whole-line search semantics are retained. | Recovery/presentation tests, including delivered continuations and exact boundary reconstruction. |
+| R7 | Artifact ownership and retention are session-scoped. | Host artifact service; `artifact-store.test.ts`. |
+
+## Scope correction: plugin and reference host (2026-09-23)
+
+The repeated filesystem hardening work expanded beyond the intended plugin.
+System One does not write files. It judges evidence from a proposed action;
+Brainstem's host integration enforces the resulting allow/ask/deny decision.
+The host's tools, permissions and isolation determine actual filesystem effects.
+
+The reference CLI now uses a small local write implementation with preparation
+before review, action-bound approval, best-effort stale-file checks, private
+staging and descriptor-based chmod. The check/rename race remains explicitly
+outside its guarantee. No Python helper, transactional database or new workspace
+mode is required. Existing plugin review, capture and recovery fixes remain.
+
+The original requirements and validation history below are preserved to explain
+past decisions. Their strong managed-filesystem release gates apply only if that
+separate execution product is resumed; they must not be mistaken for guarantees
+of the plugin or its demo CLI.
 
 ## Direct remediation after commit-stage validation (2026-09-23)
 

@@ -23,6 +23,12 @@ removed and all managed writes explicitly report unavailable, as required by the
 [P1/P2 remediation plan](2026-09-22-review-remediation.md). This is a refusal
 fallback, not completion of a transactional write capability.
 
+**2026-09-23 product-scope correction:** The user clarified the product is a
+judgment plugin. Host agents own execution/isolation; the CLI is a reference host
+with ordinary local file tools. Its temporary write refusal is superseded. The
+transactional workspace proposal is deferred and is not a prerequisite for the
+plugin. See the current [remediation status](2026-09-22-review-remediation.md).
+
 ## 1. Product contract
 
 Brainstem is a coding-agent harness that uses Jev for bounded judgments about execution, results, progress, model selection, relevant capabilities, and which output evidence the current task needs.

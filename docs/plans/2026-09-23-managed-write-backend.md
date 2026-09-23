@@ -1,8 +1,19 @@
 # Managed write backend: design and feasibility
 
 Date: 2026-09-23
-Status: Design proposal; prototype and runtime integration not implemented
-Baseline: `fa59e21` — managed writes explicitly unavailable
+Status: Deferred — outside the plugin product scope; do not implement as a plugin prerequisite
+Historical baseline: `fa59e21` — CLI writes were temporarily unavailable
+
+## Scope decision (2026-09-23)
+
+The user clarified that Brainstem is a plugin supplying System One judgments,
+not an owner of a transactional coding workspace. Host agents own file execution,
+permissions, sandboxing and concurrency. The reference CLI uses ordinary local
+file tools with explicit limitations; its earlier write refusal is superseded.
+No W0–W4 work below is required to ship the plugin. Retain this proposal only if
+a separate managed-executor product is deliberately pursued later.
+
+The remaining sections record the earlier proposal, not the current roadmap.
 
 The [review remediation plan](2026-09-22-review-remediation.md) specifies the
 R2/R3 safety requirements and unavailable fallback. The [runtime plan](2026-09-22-runtime-consolidation.md)
