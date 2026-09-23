@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "vitest";
 import { chmodSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { isInside, resolveParentForWrite, resolvePath, writeCapability, writeFileVerified, WRITE_UNAVAILABLE_REASON } from "../src/paths";
+import { isInside, resolveParentForWrite, resolvePath, writeCapability, prepareDemoWrite, executeDemoWrite } from "../src/paths";
 
 let dir: string;
 afterEach(() => {
@@ -69,38 +69,46 @@ describe("resolveParentForWrite", () => {
   });
 });
 
-describe("R2/R3: unavailable managed writes have no filesystem effects", () => {
-  test("capability is unavailable even when descriptor-relative syscalls are supported", () => {
-    expect(writeCapability()).toBe("unavailable");
+describe("reference CLI local writes", () => {
+  test("advertises local demo execution rather than isolation", () => {
+    expect(writeCapability()).toBe("local-demo");
   });
 
-  test.each(["existing", "absent", "outside", "symlink", "hardlink", "nested", "directory"])("refuses %s targets without staging, replacing, or chmod", (kind) => {
-    dir = mkdtempSync(join(tmpdir(), "brainstem-write-unavailable-"));
-    const root = join(dir, "repo");
-    mkdirSync(root);
-    const outside = join(dir, "outside.txt");
-    writeFileSync(outside, "outside");
-    chmodSync(outside, 0o600);
-    const existing = join(root, "file.txt");
-    writeFileSync(existing, "concurrent edit");
-    chmodSync(existing, 0o755);
-    symlinkSync(outside, join(root, "link.txt"));
-    linkSync(outside, join(root, "hard.txt"));
-    mkdirSync(join(root, "folder"));
-    const targets: Record<string, string> = {
-      existing: "file.txt", absent: "new.txt", outside, symlink: "link.txt",
-      hardlink: "hard.txt", nested: "new/deep/file.txt", directory: "folder",
-    };
-    const before = readdirSync(root).sort();
-    const inode = statSync(existing).ino;
-    const result = writeFileVerified(root, targets[kind]!, "stale replacement");
-    expect(result).toEqual({ ok: false, reason: WRITE_UNAVAILABLE_REASON });
-    expect(readFileSync(existing, "utf8")).toBe("concurrent edit");
-    expect(statSync(existing).ino).toBe(inode);
-    expect(statSync(existing).mode & 0o777).toBe(0o755);
-    expect(readFileSync(outside, "utf8")).toBe("outside");
-    expect(statSync(outside).mode & 0o777).toBe(0o600);
-    expect(readdirSync(root).sort()).toEqual(before);
-    expect(existsSync(join(root, "new"))).toBe(false);
+  test("creates nested files and replaces existing files while preserving mode and hardlink contents", () => {
+    dir = mkdtempSync(join(tmpdir(), "brainstem-demo-write-"));
+    const linked = join(dir, "linked.txt");
+    writeFileSync(linked, "original");
+    chmodSync(linked, 0o755);
+    linkSync(linked, join(dir, "target.txt"));
+    executeDemoWrite(prepareDemoWrite(dir, "new/deep/file.txt", "new"));
+    executeDemoWrite(prepareDemoWrite(dir, "target.txt", "replacement"));
+    expect(readFileSync(join(dir, "new/deep/file.txt"), "utf8")).toBe("new");
+    expect(readFileSync(join(dir, "target.txt"), "utf8")).toBe("replacement");
+    expect(readFileSync(linked, "utf8")).toBe("original");
+    expect(statSync(join(dir, "target.txt")).mode & 0o777).toBe(0o755);
+    expect(readdirSync(dir).some((name) => name.startsWith(".brainstem-write-"))).toBe(false);
+  });
+
+  test("rejects final symlinks and directories without changing their targets", () => {
+    dir = mkdtempSync(join(tmpdir(), "brainstem-demo-write-"));
+    writeFileSync(join(dir, "original.txt"), "original");
+    symlinkSync(join(dir, "original.txt"), join(dir, "link.txt"));
+    symlinkSync(join(dir, "absent.txt"), join(dir, "dangling.txt"));
+    mkdirSync(join(dir, "folder"));
+    for (const path of ["link.txt", "dangling.txt", "folder"]) {
+      expect(() => prepareDemoWrite(dir, path, "replacement")).toThrow();
+    }
+    expect(readFileSync(join(dir, "original.txt"), "utf8")).toBe("original");
+    expect(existsSync(join(dir, "absent.txt"))).toBe(false);
+  });
+
+  test("detects edits between preparation and execution", () => {
+    dir = mkdtempSync(join(tmpdir(), "brainstem-demo-write-"));
+    const target = join(dir, "file.txt");
+    writeFileSync(target, "original");
+    const prepared = prepareDemoWrite(dir, "file.txt", "replacement");
+    writeFileSync(target, "editor change");
+    expect(() => executeDemoWrite(prepared)).toThrow(/changed since review/);
+    expect(readFileSync(target, "utf8")).toBe("editor change");
   });
 });

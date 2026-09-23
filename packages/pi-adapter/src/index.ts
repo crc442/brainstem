@@ -50,14 +50,14 @@ function textOf(content: readonly { type: string; text?: string }[]): string {
  *
  * Filesystem contract limitation (R2): this package gates and sanitizes
  * whatever tools the CONSUMER supplies — it does not execute writes itself
- * and supplies no filesystem isolation. The CLI currently refuses managed
- * writes because its former executor could not enforce safe commit. Wrapping a
+ * and supplies no filesystem isolation. The CLI is a reference host with
+ * ordinary local file tools, not a transactional write backend. Wrapping a
  * consumer-supplied write tool's beforeToolCall/afterToolCall hooks is a
  * preflight check on the ARGUMENTS Gate was shown, not an enforcement of how
  * that tool's own execute() actually opens the file — it cannot detect or
  * prevent that tool resolving a symlinked or substituted target after Gate
- * approved it. A consumer wanting that guarantee needs an executor that
- * enforces it through commit, or must refuse the write capability.
+ * approved it. The host owns its executor, permissions and isolation policy;
+ * none of those guarantees are added by attaching this plugin.
  */
 export function attachReflexes(agent: Agent, reflexes: Reflexes, options: AttachReflexesOptions): void {
   const capturedTools = options.capturedTools ?? DEFAULT_CAPTURED_TOOLS;

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "vitest";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
@@ -316,25 +316,69 @@ describe("approval lifecycle", () => {
 const WRITE_CALL = (id: string, path: string, content: string): AssistantMessage =>
   assistantMessage([{ type: "toolCall", id, name: "write", arguments: { path, content } }], "toolUse");
 
-describe("R3: approval cannot enable an unavailable write capability", () => {
-  test.each(["approve_once", "deny"] as const)("a handler returning %s is never solicited for a managed write", async (resolution) => {
+describe("reference CLI write approvals", () => {
+  test.each(["approve_once", "deny"] as const)("%s applies only the displayed write", async (resolution) => {
     dir = mkdtempSync(join(tmpdir(), "brainstem-write-approval-"));
     const target = join(dir, "file.txt");
     writeFileSync(target, "original");
-    let asked = 0;
+    let request: ApprovalRequest | undefined;
     const harness = createHarness({
       systemOne: askUserSystemOne(),
       streamFn: scriptedStream([WRITE_CALL("tc1", "file.txt", "replacement"), DONE]),
-      model: undefined as never,
-      trust: 0.3,
-      journalPath: join(dir, "journal.ndjson"),
-      cwd: dir,
-      approvalHandler: async () => { asked++; return resolution; },
+      model: undefined as never, trust: 0.3, journalPath: join(dir, "journal.ndjson"), cwd: dir,
+      approvalHandler: async (req) => { request = req; return resolution; },
     });
     await harness.prompt("Update file.txt");
-    expect(asked).toBe(0);
-    expect(approvalEvents(eventsOf(harness.journalPath))).toEqual([]);
-    expect(readFileSync(target, "utf8")).toBe("original");
-    expect(toolResultOf(harness, "tc1").text).toContain("managed write capability unavailable");
+    expect(request?.changeSummary).toContain("-original");
+    expect(request?.changeSummary).toContain("+replacement");
+    expect(readFileSync(target, "utf8")).toBe(resolution === "approve_once" ? "replacement" : "original");
+    expect(approvalEvents(eventsOf(harness.journalPath)).map((e) => e.status)).toEqual(["requested", resolution === "approve_once" ? "approved" : "denied"]);
+  });
+
+  test("an edit while approval is pending invalidates the proposed write", async () => {
+    dir = mkdtempSync(join(tmpdir(), "brainstem-write-approval-"));
+    const target = join(dir, "file.txt");
+    writeFileSync(target, "original");
+    const harness = createHarness({
+      systemOne: askUserSystemOne(), streamFn: scriptedStream([WRITE_CALL("tc1", "file.txt", "replacement"), DONE]),
+      model: undefined as never, trust: 0.3, journalPath: join(dir, "journal.ndjson"), cwd: dir,
+      approvalHandler: async () => { writeFileSync(target, "editor change"); return "approve_once"; },
+    });
+    await harness.prompt("Update file.txt");
+    expect(readFileSync(target, "utf8")).toBe("editor change");
+    expect(approvalEvents(eventsOf(harness.journalPath)).map((e) => e.status)).toEqual(["requested", "invalidated"]);
+  });
+
+  test("mutating the approval request snapshot cannot change the executed bytes", async () => {
+    dir = mkdtempSync(join(tmpdir(), "brainstem-write-approval-"));
+    const harness = createHarness({
+      systemOne: askUserSystemOne(), streamFn: scriptedStream([WRITE_CALL("tc1", "file.txt", "reviewed"), DONE]),
+      model: undefined as never, trust: 0.3, journalPath: join(dir, "journal.ndjson"), cwd: dir,
+      approvalHandler: async (req) => {
+        (req.validatedArgs as { content: string }).content = "changed by handler";
+        return "approve_once";
+      },
+    });
+    await harness.prompt("Create file.txt");
+    expect(readFileSync(join(dir, "file.txt"), "utf8")).toBe("reviewed");
+  });
+
+  test("an outside-root write requires approval even when Gate would allow it", async () => {
+    dir = mkdtempSync(join(process.cwd(), ".test-outside-approval-"));
+    const root = join(dir, "repo");
+    mkdirSync(root);
+    const target = join(dir, "outside.txt");
+    writeFileSync(target, "original");
+    let request: ApprovalRequest | undefined;
+    const harness = createHarness({
+      systemOne: askUserSystemOne(), streamFn: scriptedStream([WRITE_CALL("tc1", "../outside.txt", "approved"), DONE]),
+      model: undefined as never, trust: 0.3, journalPath: join(dir, "journal.ndjson"), cwd: root,
+      approvalHandler: async (req) => { request = req; return "approve_once"; },
+    });
+    await harness.prompt("Update outside.txt");
+    expect(request?.target).toBe(target);
+    expect(request?.reasons).toContain("write outside project root requires approval");
+    expect(readFileSync(target, "utf8")).toBe("approved");
+    expect(harness.approvalsRequested()).toBe(1);
   });
 });
