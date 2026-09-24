@@ -1,4 +1,4 @@
-import { JevUnavailableError, type AskOptions, type Answer, type Question, type SystemOne } from "@brainstem/core";
+import { JevUnavailableError, validateAnswers, type AskOptions, type Answer, type Question, type SystemOne } from "@brainstem/core";
 
 export interface GenericJudgeOptions {
   /** The consumer's own LLM call — however they already talk to whatever model they use. */
@@ -104,7 +104,7 @@ export function genericJudge(options: GenericJudgeOptions): SystemOne {
         // is a bare string-in, string-out function with no usage metadata.
         // Unknown is distinct from a measured zero.
         usage: { inputTokens: null, outputTokens: null },
-        answers,
+        answers: validateAnswers(questions, answers),
       };
     },
   };

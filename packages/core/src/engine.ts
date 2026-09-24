@@ -462,7 +462,7 @@ export class ReflexEngine {
       record("cancelled", null, "judgment aborted");
       return { status: "cancelled", reason: "judgment aborted", judgmentId };
     }
-    const cacheKey = this.cache ? computeCacheKey(`${this.systemOne.name}:${JSON.stringify(this.systemOne.capabilities)}`, state, questions) : undefined;
+    const cacheKey = this.cache ? computeCacheKey(`${this.systemOne.name}:${JSON.stringify(this.systemOne.capabilities)}:${hashAction(this.policy)}`, state, questions) : undefined;
 
     // Checked before the budget gate: a hit makes zero new provider calls, so
     // it must never be blocked by a budget that exists to bound new spend,
@@ -512,7 +512,7 @@ export class ReflexEngine {
         const reason = Object.entries(errors)
           .map(([name, message]) => `${name}: ${message}`)
           .join("; ");
-        record("unavailable", null, reason);
+        record("unavailable", result, reason);
         return { status: "unavailable", reason, judgmentId, groups: valid };
       } catch (error) {
         if (error instanceof JevCancelledError) {
@@ -582,16 +582,20 @@ export class ReflexEngine {
 
     // The semantic evidence sent to Jev is separate from the immutable actionHash
     // used for approvals — the hash must never appear in the judgment state.
+    const args = input.arguments === undefined ? undefined : boundForReview(JSON.stringify(input.arguments), REVIEW_CHAR_CAP);
+    const command = input.command === undefined ? undefined : boundForReview(input.command, REVIEW_CHAR_CAP);
+    const summary = input.changeSummary === undefined ? undefined : boundForReview(input.changeSummary, REVIEW_CHAR_CAP);
+    const incomplete = input.evidenceIncomplete || args?.truncated || command?.truncated || summary?.truncated;
     const state = {
       task: input.task,
       environment: this.environment,
       action: {
         tool: input.tool,
-        ...(input.arguments !== undefined ? { arguments: input.arguments } : {}),
-        ...(input.command !== undefined ? { command: input.command } : {}),
+        ...(args ? { arguments: args.text } : {}),
+        ...(command ? { command: command.text } : {}),
         ...(input.path !== undefined ? { path: input.path } : {}),
-        ...(input.changeSummary !== undefined ? { changeSummary: input.changeSummary } : {}),
-        ...(input.evidenceIncomplete === true ? { evidenceIncomplete: true } : {}),
+        ...(summary ? { changeSummary: summary.text } : {}),
+        ...(incomplete ? { evidenceIncomplete: true } : {}),
       },
     };
     const questions = gateQuestions(input.task);
@@ -604,7 +608,7 @@ export class ReflexEngine {
     }
 
     let decision = decideGate(judgment.answers!, this.policy);
-    if (input.evidenceIncomplete && decision.action === "auto") decision = { action: "ask", reasons: ["action evidence incomplete", ...decision.reasons] };
+    if (incomplete && decision.action === "auto") decision = { action: "ask", reasons: ["action evidence incomplete", ...decision.reasons] };
     if (floor === "ask" && decision.action === "auto") {
       decision = { action: "ask", reasons: ["static floor: risky pattern", ...decision.reasons] };
     }
@@ -904,6 +908,7 @@ export class ReflexEngine {
       judgmentId,
       ts: Date.now(),
       reflex,
+      answerSchema: 2,
       subject,
       status,
       state,

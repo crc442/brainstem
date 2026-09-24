@@ -79,7 +79,7 @@ export function replayJournal(events: JournalEvent[], policy: Policy): ReplayRep
 
   for (const event of events) {
     if (event.t !== "reflex") continue;
-    if (!event.result) continue;
+    if (!event.result || event.status !== "completed") continue;
     answersByJudgment.set(event.judgmentId, event.result.answers);
     subjectByJudgment.set(event.judgmentId, event.subject);
   }
@@ -104,6 +104,12 @@ export function replayJournal(events: JournalEvent[], policy: Policy): ReplayRep
     if (answers === undefined || decide === undefined) {
       report.unsupported += 1;
       bump(report.unsupportedReasons, answers === undefined ? "missing reflex" : `unknown reflex: ${event.reflex}`);
+      continue;
+    }
+
+    if ((event.reflex === "gate" || event.reflex === "steer") && Object.values(answers).some((a) => a.type !== "noul" && a.confidence !== null && (!a.confidenceSource || a.confidenceSource === "legacy"))) {
+      report.unsupported += 1;
+      bump(report.unsupportedReasons, "legacy confidence provenance unavailable");
       continue;
     }
 

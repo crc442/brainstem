@@ -119,3 +119,47 @@ for (const adapter of ["cli", "pi"] as const) {
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 }
+
+for (const adapter of ["cli", "pi"] as const) {
+  test(`${adapter}: all reflexes off dispatch no judgments; message Gate blocks before any model call`, async () => {
+    const dir = mkdtempSync(join(tmpdir(), "brainstem-modes-"));
+    try {
+      const seen: { model: string; context: any }[] = [];
+      const judge = mockSystemOne(() => ({ disposition: choiceAnswer("deny", 1) }));
+      const modes = { select: "off", focus: "off", messageGate: "off", gate: "off", sanitize: "off", verify: "off", pulse: "off", steer: "off" } as const;
+      if (adapter === "cli") {
+        const h = createHarness({ cwd: dir, systemOne: judge, streamFn: scripted([done], seen), model: undefined as never, trust: 0.3, journalPath: join(dir, "off.jsonl"), reflexModes: modes });
+        await h.prompt("hello"); h.endSession();
+        expect(judge.calls).toHaveLength(0);
+        const gated = createHarness({ cwd: dir, systemOne: judge, streamFn: scripted([done], seen), model: undefined as never, trust: 0.3, journalPath: join(dir, "gate.jsonl"), reflexModes: { ...modes, messageGate: "active" } });
+        await expect(gated.prompt("forbidden request")).rejects.toThrow("denied"); gated.endSession();
+      } else {
+        const a = new Agent({ streamFn: scripted([done], seen) });
+        const off = attachReflexes(a, createReflexes({ judge }), { cwd: dir, modes });
+        await off.prompt("hello"); off.dispose();
+        expect(judge.calls).toHaveLength(0);
+        const gated = attachReflexes(a, createReflexes({ judge }), { cwd: dir, modes: { ...modes, messageGate: "active" } });
+        await expect(gated.prompt("forbidden request")).rejects.toThrow("denied"); gated.dispose();
+      }
+      expect(seen).toHaveLength(1);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+}
+
+test("host recovery delivers a large stored page without re-executing the source tool", async () => {
+  const seen: { model: string; context: any }[] = [];
+  let sourceCalls = 0;
+  const source = "prefix".repeat(2000) + "LATE_FACT";
+  const agent = new Agent({ streamFn: scripted([
+    message([{ type: "toolCall", id: "source", name: "read", arguments: { path: "log" } }], "toolUse"),
+    message([{ type: "toolCall", id: "page", name: "read_output", arguments: {} }], "toolUse"), done,
+  ], seen), initialState: { tools: [tool("read", source, () => sourceCalls++), tool("read_output", source.slice(-7900))] } });
+  const plugin = attachReflexes(agent, createReflexes({ judge: provider(), root: "/tmp" }), {
+    cwd: "/tmp", outputSource: (context, text) => ({ kind: "captured", sourceId: context.toolCall.id, stream: "output", text, completeness: "complete", recovery: { sessionId: plugin.session.sessionId, sourceId: "source", instructions: "use read_output" } }),
+  });
+  await plugin.prompt("find late fact");
+  expect(JSON.stringify(seen[1]?.context)).not.toContain("LATE_FACT");
+  expect(JSON.stringify(seen[2]?.context)).toContain("LATE_FACT");
+  expect(sourceCalls).toBe(1);
+  plugin.dispose();
+});

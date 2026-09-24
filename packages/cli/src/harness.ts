@@ -17,6 +17,7 @@ import {
   openJournal,
   policyForTrust,
   staticVerdict,
+  type ReflexModes, type ReflexName, type ReflexMode, type GateInput,
   type AnswerCache,
   type ApprovalHandler,
   type ApprovalRequest,
@@ -63,6 +64,9 @@ export interface HarnessOptions {
   focusMode?: FocusRolloutMode;
   pulseEveryTurns?: number;
   signal?: AbortSignal;
+  reflexModes?: ReflexModes;
+  messageConstraints?: string[];
+  maxJudgmentCalls?: number;
   onReflex?: (line: string) => void;
   onDelta?: (delta: string) => void;
 }
@@ -172,6 +176,9 @@ function withAbort<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
 
 export function createHarness(options: HarnessOptions): Harness {
   const policy = policyForTrust(options.trust);
+  const lifecycle = new AbortController();
+  const pluginSignal = options.signal ? AbortSignal.any([lifecycle.signal, options.signal]) : lifecycle.signal;
+  const mode = (name: ReflexName, fallback: ReflexMode = "active"): ReflexMode => options.reflexModes?.[name] ?? fallback;
   const journal = openJournal(options.journalPath);
   const recorder = new SessionRecorder(journal, options.cwd, { policy, trust: options.trust });
 
@@ -188,7 +195,8 @@ export function createHarness(options: HarnessOptions): Harness {
       ...(recorder.currentTurnId !== undefined ? { turnId: recorder.currentTurnId } : {}),
     }),
     budgets: policy.budgets,
-    signal: options.signal,
+    signal: pluginSignal,
+    maxJudgmentCalls: options.maxJudgmentCalls,
     cache: options.answerCache ?? new BoundedAnswerCache(),
   });
 
@@ -212,7 +220,7 @@ export function createHarness(options: HarnessOptions): Harness {
     recorder.sessionId,
   );
   const registry = options.registry ?? new CapabilityRegistry();
-  const driver = new SelectDriver({ registry, engine, minRefreshIntervalMs: 0 });
+  const driver = new SelectDriver({ registry, engine, minRefreshIntervalMs: 0, mode: mode("select") });
 
   const approvedWrites = new Map<string, PreparedDemoWrite>();
   const tools: AgentTool[] = [
@@ -436,6 +444,13 @@ export function createHarness(options: HarnessOptions): Harness {
     return undefined;
   }
 
+  async function judgeAction(input: GateInput, signal?: AbortSignal) {
+    const floor = staticVerdict(input.tool, { command: input.command, path: input.path }, options.cwd);
+    if (mode("gate") === "off") return { action: floor ?? "auto", reasons: floor ? ["host static permission rule"] : [] };
+    const decision = await timedJev(() => engine.gate(input, { signal }));
+    return mode("gate") === "shadow" ? { action: floor ?? "auto", reasons: ["Gate shadow; host permissions applied"] } : decision;
+  }
+
   const innerStreamFn = options.streamFn;
   let modelStartedAt = 0;
   let firstTokenAt: number | undefined;
@@ -443,7 +458,7 @@ export function createHarness(options: HarnessOptions): Harness {
     modelStartedAt = performance.now();
     firstTokenAt = undefined;
     engine.noteModelCall();
-    if (options.miniModel) {
+    if (options.miniModel && mode("steer") !== "off") {
       const latest = recorder.recentActivity(1)[0];
       const capabilities = activeCapabilityDescriptions();
       const decision = await timedJev(() =>
@@ -460,7 +475,7 @@ export function createHarness(options: HarnessOptions): Harness {
         ),
       );
       options.onReflex?.(render("steer", decision.tier, decision.reasons));
-      return innerStreamFn(decision.tier === "mini" ? options.miniModel : model, context, streamOptions);
+      return innerStreamFn(mode("steer") === "active" && decision.tier === "mini" ? options.miniModel : model, context, streamOptions);
     }
     return innerStreamFn(model, context, streamOptions);
   };
@@ -477,7 +492,7 @@ export function createHarness(options: HarnessOptions): Harness {
     shouldStopAfterTurn: async () => {
       turnsCompleted += 1;
       const every = options.pulseEveryTurns ?? 3;
-      if (turnsCompleted % every !== 0) return false;
+      if (mode("pulse") === "off" || turnsCompleted % every !== 0) return false;
 
       const decision = await timedJev(() =>
         engine.pulse({
@@ -490,6 +505,7 @@ export function createHarness(options: HarnessOptions): Harness {
       );
       options.onReflex?.(render("pulse", decision.action, decision.reasons));
 
+      if (mode("pulse") !== "active") return false;
       if (decision.action === "stop") return true;
       if (decision.action === "intervene") {
         agent.steer({
@@ -554,6 +570,7 @@ export function createHarness(options: HarnessOptions): Harness {
     beforeToolCall: async ({ toolCall, args }, signal) => {
       const a = (args ?? {}) as { command?: string; path?: string };
       const toolCallId = toolCall.id;
+      const initialArguments = JSON.stringify(args);
 
       if (toolCall.name === "write") {
         approvedWrites.delete(toolCallId);
@@ -577,10 +594,10 @@ export function createHarness(options: HarnessOptions): Harness {
         const change = changeSummaryForWrite(options.cwd, prepared.target, prepared.content);
         const decision = floor === "ask"
           ? { action: "ask", reasons: ["write outside project root requires approval"] }
-          : await timedJev(() => engine.gate({
+          : await judgeAction({
               tool: "write", task: taskText(), path: prepared.target,
               changeSummary: change.changeSummary, evidenceIncomplete: change.evidenceIncomplete,
-            }));
+            }, signal);
         options.onReflex?.(render("gate", decision.action, decision.reasons));
         if (decision.action === "deny") return denyWrite(decision.reasons.join("; "));
         if (decision.action === "ask") {
@@ -602,9 +619,8 @@ export function createHarness(options: HarnessOptions): Harness {
       }
 
       if (toolCall.name === "bash") {
-        const decision = await timedJev(() =>
-          engine.gate({ tool: toolCall.name, task: taskText(), command: a.command ?? "" }),
-        );
+        const decision = await judgeAction({ tool: toolCall.name, task: taskText(), command: a.command ?? "" }, signal);
+        if (signal?.aborted || initialArguments !== JSON.stringify(args)) return { block: true, reason: "[brainstem] action changed or cancelled since review" };
         options.onReflex?.(render("gate", decision.action, decision.reasons));
         if (decision.action === "deny") {
           const reason = `[brainstem] denied: ${decision.reasons.join("; ")}. Do not retry this command.`;
@@ -723,7 +739,8 @@ export function createHarness(options: HarnessOptions): Harness {
       // string, not two independently-phrased ones.
       const intent = `${toolCall.name} ${JSON.stringify(toolCall.arguments)}`;
 
-      const focusRollout: FocusRolloutMode = options.focusMode ?? "off";
+      const effectiveFocus = mode("focus", options.focusMode === "on" ? "active" : options.focusMode ?? "off");
+      const focusRollout: FocusRolloutMode = effectiveFocus === "active" ? "on" : effectiveFocus;
       const reviewed = await processOutput({
         capture: {
           kind: "captured", sourceId: artifact?.artifactId ?? toolCallId, stream: "output", text: fullText,
@@ -732,7 +749,7 @@ export function createHarness(options: HarnessOptions): Harness {
         },
         task: taskText(), action: intent, status: obs.status, recent: recorder.recentActivity(5),
         focus: artifact ? (focusRollout === "on" ? "active" : focusRollout) : "off",
-        nonTextCount, signal: options.signal,
+        nonTextCount, signal: pluginSignal, sanitize: mode("sanitize"), verify: mode("verify"),
         fallback: artifact ? (text) => presentArtifact(text, artifact.artifactId, { rollout: "off" }) : undefined,
       }, {
         focus: (input, opts) => timedJev(() => engine.focus(input, opts)),
@@ -783,11 +800,14 @@ export function createHarness(options: HarnessOptions): Harness {
         // original error flag unless explicitly overridden, and content
         // review must never itself flip an ok result into an error or vice
         // versa.
-        return { content: [{ type: "text", text: deliveredExcerpt }] };
+        return { content: [{ type: "text", text: deliveredExcerpt }, ...(mode("sanitize") !== "active" && mode("verify") !== "active" ? rawContent.filter((c) => c.type !== "text") : [])] } as never;
       }
       return undefined;
     },
   });
+
+  const abortAgent = () => agent.abort();
+  pluginSignal.addEventListener("abort", abortAgent, { once: true });
 
   agent.subscribe((event) => {
     if (event.type === "message_end") {
@@ -838,11 +858,24 @@ export function createHarness(options: HarnessOptions): Harness {
     journalPath: options.journalPath,
     approvalsRequested: () => approvalsRequestedCount,
     async prompt(text: string) {
+      if (pluginSignal.aborted) throw new Error("harness session cancelled or ended");
       recorder.startTask(text);
+      engine.resetTask();
       turnJevMs = 0;
       turnModelMs = 0;
       recorder.beginTurn();
       try {
+        if (mode("messageGate", "off") !== "off") {
+          const decision = await timedJev(() => engine.messageGate({ message: text, task: taskText(), constraints: options.messageConstraints ?? [] }, { signal: pluginSignal }));
+          options.onReflex?.(render("message_gate", decision.action, decision.reasons));
+          if (mode("messageGate", "off") === "active") {
+            if (decision.action === "deny") throw new Error(`[brainstem] message denied: ${decision.reasons.join("; ")}`);
+            if (decision.action === "ask") {
+              const blocked = await runApproval(newId("message"), "message", { message: text }, decision.reasons, pluginSignal, { changeSummary: boundForReview(text).text });
+              if (blocked) throw new Error(blocked.reason);
+            }
+          }
+        }
         // Initial capability selection for this task. Done here rather than before
         // Agent construction because the objective is only known at prompt time.
         const initialDecision = await driver.refresh({ task: taskText(), recent: [] }, { reason: "initial" });
@@ -852,7 +885,7 @@ export function createHarness(options: HarnessOptions): Harness {
         );
         const refreshedBuilt = buildActiveContext(registry, refreshedWs);
         agent.state.tools = refreshedBuilt.tools;
-        if (refreshedBuilt.instructionBlock !== undefined) {
+        if (refreshedBuilt.instructionBlock !== undefined && refreshedBuilt.instructionHash !== appliedInstructionHash) {
           const skillMessage: Message = { role: "system", content: refreshedBuilt.instructionBlock, timestamp: Date.now() };
           agent.state.messages = [...agent.state.messages, skillMessage];
         }
@@ -860,6 +893,7 @@ export function createHarness(options: HarnessOptions): Harness {
         appliedInstructionHash = refreshedBuilt.instructionHash;
         lastTaskRevision = recorder.currentTask?.revision ?? 0;
 
+        if (pluginSignal.aborted) throw new Error("message preparation cancelled");
         await agent.prompt(text);
       } finally {
         const spans: TurnSpans = {};
@@ -869,6 +903,8 @@ export function createHarness(options: HarnessOptions): Harness {
       }
     },
     endSession(reason: "normal" | "error" = "normal", error?: string) {
+      lifecycle.abort();
+      pluginSignal.removeEventListener("abort", abortAgent);
       recorder.endSession(reason, error);
     },
   };

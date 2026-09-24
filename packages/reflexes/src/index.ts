@@ -16,7 +16,7 @@ import {
   REVIEW_CHAR_CAP,
   type SystemOne,
   type Policy,
-  type Journal,
+  type Journal, type JournalEvent,
   type GateInput,
   type GateDecision,
   type ObserveToolResultInput,
@@ -40,6 +40,19 @@ export interface ReflexDecisionEvent {
   judgmentId?: string;
 }
 
+export interface JudgmentEvent {
+  sessionId: string;
+  judgmentId: string;
+  reflex: string;
+  status: "completed" | "unavailable" | "cancelled";
+  model?: string;
+  durationMs?: number;
+  usage: AskResult["usage"];
+  cacheHit: boolean;
+  cachedFromJudgmentId?: string;
+  answerSchema: 2;
+}
+
 export interface ReflexesOptions {
   /** The only required option. Any SystemOne implementation works — see jevJudge / genericJudge. */
   judge: SystemOne;
@@ -56,6 +69,8 @@ export interface ReflexesOptions {
   policy?: Partial<Policy>;
   /** Called after every decision. No journal is created unless this or journalPath is supplied. */
   onDecision?: (event: ReflexDecisionEvent) => void;
+  /** Metadata only: no prompt, tool text, or secrets. Cache hits have zero incremental usage. */
+  onJudgment?: (event: JudgmentEvent) => void;
   /** When supplied, decisions are ALSO durably appended via @brainstem/core's journal format. */
   journalPath?: string;
 }
@@ -93,7 +108,17 @@ export interface Reflexes {
 }
 
 export function createReflexes(options: ReflexesOptions): Reflexes {
-  const journal: Journal = options.journalPath ? openJournal(options.journalPath) : { append() {} };
+  const sink = options.journalPath ? openJournal(options.journalPath) : undefined;
+  const journal: Journal = { append(event: JournalEvent) {
+    sink?.append(event);
+    if (event.t === "reflex") {
+      options.onJudgment?.({ sessionId: event.sessionId, judgmentId: event.judgmentId, reflex: event.reflex, status: event.status,
+        model: event.result?.model, durationMs: event.cacheHit ? 0 : event.result?.latencyMs,
+        usage: event.cacheHit ? { inputTokens: 0, outputTokens: 0 } : event.result?.usage ?? { inputTokens: null, outputTokens: null },
+        cacheHit: event.cacheHit === true, cachedFromJudgmentId: event.cachedFromJudgmentId, answerSchema: 2,
+      });
+    }
+  } };
   const policy: Policy = { ...policyForTrust(0.3), ...options.policy };
   const sessionId = newId("sess");
 
