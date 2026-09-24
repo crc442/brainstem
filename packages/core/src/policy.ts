@@ -5,6 +5,7 @@ export const DEFAULT_TRUST = 0.3;
 export interface Policy {
   model: string;
   confidenceFloor: number;
+  acceptedConfidenceSources?: ("provider-reported" | "self-reported" | "calibrated")[];
   gate: {
     autoConfidence: number;
     askDestructive: number;
@@ -61,6 +62,7 @@ export function policyForTrust(trust: number): Policy {
   return {
     model: DEFAULT_JEV_MODEL,
     confidenceFloor: 0.5,
+    acceptedConfidenceSources: ["provider-reported", "calibrated"],
     gate: {
       autoConfidence: 0.95 - 0.35 * t,
       askDestructive: 0.5,

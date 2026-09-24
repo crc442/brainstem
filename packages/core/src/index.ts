@@ -135,3 +135,5 @@ export type {
 } from "./output-focus";
 export { computeCacheKey, BoundedAnswerCache } from "./cache";
 export type { AnswerCache, AnswerCacheEntry, BoundedAnswerCacheOptions } from "./cache";
+
+export { judgmentService } from "./judge-service";

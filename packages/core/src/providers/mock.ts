@@ -11,6 +11,7 @@ export function choiceAnswer(choice: string, confidence: number, probabilities?:
     choice,
     probabilities: probabilities ?? { [choice]: confidence },
     confidence,
+    confidenceSource: "provider-reported",
   };
   return answer;
 }
@@ -21,6 +22,7 @@ export function scoreAnswer(score: number, confidence: number, probabilities?: R
     score,
     probabilities: probabilities ?? {},
     confidence,
+    confidenceSource: "provider-reported",
   };
 }
 

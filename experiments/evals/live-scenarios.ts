@@ -116,7 +116,11 @@ async function main(): Promise<void> {
       .reduce((sum, e) => sum + (typeof e.usage.costTotal === "number" ? e.usage.costTotal : 0), 0);
     const jevTokens = journal
       .filter((e): e is Extract<JournalEvent, { t: "reflex" }> => e.t === "reflex" && e.result !== null)
-      .reduce((sum, e) => sum + e.result!.usage.inputTokens + e.result!.usage.outputTokens, 0);
+      .reduce((sum, e) => {
+        const { inputTokens, outputTokens } = e.result!.usage;
+        if (inputTokens === null || outputTokens === null) throw new Error("Live token total unavailable: judge did not report usage");
+        return sum + inputTokens + outputTokens;
+      }, 0);
     totalMainCost += scenarioCost;
     totalJevTokens += jevTokens;
 

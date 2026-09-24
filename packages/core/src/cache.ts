@@ -17,7 +17,7 @@ export interface AnswerCache {
 }
 
 export function computeCacheKey(provider: string, state: unknown, questions: Record<string, Question>): string {
-  return hashAction({ provider, state, questions });
+  return hashAction({ answerSchema: 2, provider, state, questions });
 }
 
 export interface BoundedAnswerCacheOptions {

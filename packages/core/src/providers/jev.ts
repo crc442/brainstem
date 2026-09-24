@@ -17,6 +17,7 @@ function mapAnswers(raw: Record<string, unknown>): Record<string, Answer> {
         choice: a.choice as string,
         probabilities: (a.probabilities ?? {}) as Record<string, number>,
         confidence: a.confidence as number,
+        confidenceSource: "provider-reported",
       };
     } else if (a.type === "score") {
       answers[id] = {
@@ -24,6 +25,7 @@ function mapAnswers(raw: Record<string, unknown>): Record<string, Answer> {
         score: a.score as number,
         probabilities: (a.probabilities ?? {}) as Record<string, number>,
         confidence: a.confidence as number,
+        confidenceSource: "provider-reported",
       };
     }
   }
@@ -33,6 +35,7 @@ function mapAnswers(raw: Record<string, unknown>): Record<string, Answer> {
 export function jevSystemOne(client: TypeSafeClient, model = DEFAULT_JEV_MODEL): SystemOne {
   return {
     name: `jev:${model}`,
+    capabilities: { confidence: "provider-reported", usage: true, cancellation: "cooperative" },
     async ask(state, questions: Record<string, Question>, options: AskOptions = {}) {
       if (options.signal?.aborted) throw new JevCancelledError("jev call aborted before start");
       const t0 = performance.now();
@@ -115,6 +118,7 @@ export function withCircuitBreaker(provider: SystemOne, breaker: CircuitBreaker)
         return result;
       } catch (error) {
         if (!(error instanceof JevCancelledError)) breaker.onFailure();
+        else breaker.onCancel();
         throw error;
       }
     },

@@ -15,12 +15,12 @@ const questions: Record<string, Question> = {
 
 const validRaw = {
   safe: { type: "noul", noul: 0.1 },
-  severity: { type: "score", score: 1, probabilities: { "0": 0.2, "1": 0.8 }, confidence: 0.9 },
+  severity: { type: "score", score: 1, probabilities: { "0": 0.2, "1": 0.8 }, confidence: 0.9, confidenceSource: "legacy" },
   disposition: {
     type: "choice",
     choice: "auto_run",
     probabilities: { auto_run: 0.9, ask_user: 0.1, deny: 0 },
-    confidence: 0.9,
+    confidence: 0.9, confidenceSource: "legacy",
   },
 };
 
@@ -75,7 +75,7 @@ describe("validateAnswers", () => {
     expectUnavailable(() =>
       validateAnswers(questions, {
         ...validRaw,
-        disposition: { type: "choice", choice: "escalate", confidence: 0.9 },
+        disposition: { type: "choice", choice: "escalate", confidence: 0.9, confidenceSource: "legacy" },
       }),
     );
   });
@@ -100,7 +100,7 @@ describe("validateAnswers", () => {
     const noProbs = { ...validRaw.disposition };
     delete (noProbs as Record<string, unknown>).probabilities;
     const answers = validateAnswers(questions, { ...validRaw, disposition: noProbs });
-    expect(answers.disposition?.type === "choice" && answers.disposition.probabilities).toEqual({});
+    expect(answers.disposition?.type === "choice" && answers.disposition.probabilities).toBeNull();
 
     expectUnavailable(() =>
       validateAnswers(questions, {

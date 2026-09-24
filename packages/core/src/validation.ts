@@ -14,7 +14,7 @@ function inUnitRange(n: number): boolean {
 }
 
 function validateProbabilities(id: string, probabilities: unknown): void {
-  if (probabilities === undefined) return;
+  if (probabilities === undefined || probabilities === null) return;
   if (probabilities === null || typeof probabilities !== "object" || Array.isArray(probabilities)) {
     fail(`answer "${id}": probabilities must be an object`);
   }
@@ -23,6 +23,15 @@ function validateProbabilities(id: string, probabilities: unknown): void {
       fail(`answer "${id}": probability "${key}" must be a finite number in [0,1]`);
     }
   }
+}
+
+function confidenceFields(id: string, a: Record<string, unknown>): Pick<ChoiceAnswer, "confidence" | "confidenceSource" | "calibrationProfile"> {
+  if (a.confidence === null && a.confidenceSource === "unavailable") return { confidence: null, confidenceSource: "unavailable" };
+  if (!finite(a.confidence) || !inUnitRange(a.confidence)) fail(`answer "${id}": confidence must be a finite number in [0,1] or explicitly unavailable`);
+  const source = a.confidenceSource ?? "legacy";
+  if (!["provider-reported", "self-reported", "calibrated", "legacy"].includes(String(source))) fail(`answer "${id}": invalid confidence provenance`);
+  if (source === "calibrated" && (typeof a.calibrationProfile !== "string" || !a.calibrationProfile)) fail(`answer "${id}": calibration profile required`);
+  return { confidence: a.confidence, confidenceSource: source as ChoiceAnswer["confidenceSource"], ...(source === "calibrated" ? { calibrationProfile: a.calibrationProfile as string } : {}) };
 }
 
 function validateAnswer(id: string, question: Question, answer: unknown): Answer {
@@ -44,14 +53,11 @@ function validateAnswer(id: string, question: Question, answer: unknown): Answer
       fail(`answer "${id}": score must be a finite number in [0,${max}]`);
     }
     validateProbabilities(id, a.probabilities);
-    if (!finite(a.confidence) || !inUnitRange(a.confidence)) {
-      fail(`answer "${id}": confidence must be a finite number in [0,1]`);
-    }
     const scored: ScoreAnswer = {
       type: "score",
       score: a.score,
-      probabilities: (a.probabilities ?? {}) as Record<string, number>,
-      confidence: a.confidence,
+      probabilities: (a.probabilities ?? null) as Record<string, number> | null,
+      ...confidenceFields(id, a),
     };
     return scored;
   }
@@ -61,14 +67,11 @@ function validateAnswer(id: string, question: Question, answer: unknown): Answer
     fail(`answer "${id}": choice must be one of ${Object.keys(question.criteria).join(", ")}`);
   }
   validateProbabilities(id, a.probabilities);
-  if (!finite(a.confidence) || !inUnitRange(a.confidence)) {
-    fail(`answer "${id}": confidence must be a finite number in [0,1]`);
-  }
   const chosen: ChoiceAnswer = {
     type: "choice",
     choice: a.choice,
-    probabilities: (a.probabilities ?? {}) as Record<string, number>,
-    confidence: a.confidence,
+    probabilities: (a.probabilities ?? null) as Record<string, number> | null,
+    ...confidenceFields(id, a),
   };
   return chosen;
 }

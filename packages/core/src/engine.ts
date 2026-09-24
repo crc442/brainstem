@@ -1,3 +1,5 @@
+import { judgmentService } from "./judge-service";
+import { CircuitBreaker } from "./circuit-breaker";
 import { checkBudgets, type BudgetCheck, type BudgetLimits } from "./budgets";
 import { createBitmap, popcount, type CapabilityBitmap } from "./bitmap";
 import { computeCacheKey, type AnswerCache } from "./cache";
@@ -169,6 +171,10 @@ export function decideGate(answers: Record<string, Answer>, policy: Policy): Gat
     return { action: "ask", reasons: ["no disposition answer"] };
   }
 
+  if (disposition.confidence === null || !(policy.acceptedConfidenceSources ?? ["provider-reported", "calibrated"]).includes(disposition.confidenceSource as never)) {
+    return { action: "ask", reasons: ["disposition confidence unavailable or unsupported provenance"] };
+  }
+
   if (disposition.choice === "deny") {
     if (disposition.confidence >= policy.confidenceFloor) {
       return { action: "deny", reasons: [`disposition deny at confidence ${disposition.confidence.toFixed(2)}`] };
@@ -314,6 +320,7 @@ export function decideSteer(answers: Record<string, Answer>, policy: Policy): St
   if (!tier || tier.choice !== "mini") {
     return { tier: "frontier", reasons: ["default frontier"] };
   }
+  if (tier.confidence === null || !(policy.acceptedConfidenceSources ?? ["provider-reported", "calibrated"]).includes(tier.confidenceSource as never)) return { tier: "frontier", reasons: ["routing confidence unavailable or unsupported provenance"] };
   if (tier.confidence >= policy.steer.miniConfidence) {
     return { tier: "mini", reasons: [`mini at confidence ${tier.confidence.toFixed(2)}`] };
   }
@@ -327,6 +334,7 @@ export interface ReflexIds {
 }
 
 export interface ReflexEngineDeps {
+  maxJudgmentCalls?: number;
   systemOne: SystemOne;
   journal: Journal;
   policy?: Policy;
@@ -366,9 +374,9 @@ export class ReflexEngine {
   private lastPulseIntervention: string | undefined;
 
   constructor(deps: ReflexEngineDeps) {
-    this.systemOne = deps.systemOne;
     this.journal = deps.journal;
     this.policy = deps.policy ?? policyForTrust(0.3);
+    this.systemOne = judgmentService(deps.systemOne, { deadlineMs: this.policy.jev.deadlineMs, breaker: new CircuitBreaker(this.policy.jev.breaker), maxCalls: deps.maxJudgmentCalls });
     this.environment = deps.environment ?? "A git repository in the current working directory.";
     this.root = deps.root;
     this.makeId = deps.makeId ?? (() => newId("j"));
@@ -440,7 +448,11 @@ export class ReflexEngine {
       this.recordReflex(reflex, subject, state, questions, result, judgmentId, status, reason, cacheProvenance);
     };
 
-    const cacheKey = this.cache ? computeCacheKey(this.systemOne.name, state, questions) : undefined;
+    if (this.signal?.aborted) {
+      record("cancelled", null, "judgment aborted");
+      return { status: "cancelled", reason: "judgment aborted", judgmentId };
+    }
+    const cacheKey = this.cache ? computeCacheKey(`${this.systemOne.name}:${JSON.stringify(this.systemOne.capabilities)}`, state, questions) : undefined;
 
     // Checked before the budget gate: a hit makes zero new provider calls, so
     // it must never be blocked by a budget that exists to bound new spend,
