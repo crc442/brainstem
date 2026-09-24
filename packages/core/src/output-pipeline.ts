@@ -129,6 +129,7 @@ export async function processOutput(input: OutputPipelineInput, deps: OutputPipe
     }
   }
   const notes: string[] = [];
+  if (focusMode === "active" && selected?.length && omitted) notes.push(`[brainstem] focus: showing ${selected.length} of ${manifest!.entries.length} sections relevant to the task.`);
   if (omitted) notes.push(capture.recovery
     ? `[brainstem] output omitted; archived as artifact ${capture.recovery.sourceId} — ${capture.recovery.instructions}`
     : "[brainstem] output omitted; this host supplies no recovery tool for the rest.");

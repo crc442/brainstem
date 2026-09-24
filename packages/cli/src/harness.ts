@@ -3,6 +3,7 @@ import type { Message, Model, Api } from "@earendil-works/pi-ai";
 import { dirname, join } from "node:path";
 import {
   ReflexEngine,
+  processOutput,
   ARTIFACT_SCHEMA_VERSION,
   BoundedAnswerCache,
   boundForReview,
@@ -722,106 +723,29 @@ export function createHarness(options: HarnessOptions): Harness {
       // string, not two independently-phrased ones.
       const intent = `${toolCall.name} ${JSON.stringify(toolCall.arguments)}`;
 
-      let manifest: SectionManifest | undefined;
-      let focusDecision: FocusDecision | undefined;
       const focusRollout: FocusRolloutMode = options.focusMode ?? "off";
-      if (artifact && focusRollout !== "off") {
-        manifest = splitIntoSections(artifact.artifactId, fullText);
-        focusDecision = await timedJev(() =>
-          engine.focus({
-            task: taskText(),
-            command: actionLabel(toolCall.name, toolCall.arguments),
-            intent,
-            outcome: obs.status,
-            recentFindings: recorder.recentActivity(5),
-            manifest: manifest!,
-            budgetChars: FOCUS_PRESENT_BUDGET_CHARS,
-          }),
-        );
-        options.onReflex?.(render("focus", focusDecision.mode, focusDecision.reasons));
-      }
-
-      // The single presentation boundary: an artifact-backed result goes
-      // through presentArtifact's line+char bounding; anything else (a write
-      // confirmation, a recovery-tool page, a discovery result) is expected
-      // to already be a complete, self-bounded view, but boundForReview is
-      // still applied as a backstop so nothing downstream can ever exceed
-      // the same cap Sanitize reviews.
-      const view = artifact
-        ? presentArtifact(fullText, artifact.artifactId, {
-            // "shadow" computes and journals the decision above but never shapes
-            // what is shown — only "on" does. This is the one place that
-            // distinction is enforced.
-            rollout: focusRollout === "on" ? "on" : "off",
-            manifest,
-            decision: focusDecision,
-          })
-        : boundForReview(fullText, REVIEW_CHAR_CAP);
-
-      let baseView = view.text;
-      let deliveredTruncated = view.truncated;
-      let deliveredWhy: string | undefined;
-
-      let deliveredExcerpt = baseView;
-
-      if (fullText.trim()) {
-        const observed = await timedJev(() =>
-          engine.observeToolResult({
-            task: taskText(),
-            source: `tool:${toolCall.name}`,
-            actionSummary: intent,
-            intent,
-            status: obs.status,
-            truncated: deliveredTruncated,
-            // The exact bounded view the model will see, never a second
-            // independent slice of the raw capture — sanitize must not judge
-            // content the agent was never shown. baseView is already bounded
-            // by the presentation boundary above, so no further slicing here.
-            content: baseView,
-          }),
-        );
-        options.onReflex?.(render("sanitize", observed.sanitize.action, observed.sanitize.reasons));
-        if (observed.verify.action === "mismatch") {
-          options.onReflex?.(render("verify", observed.verify.action, observed.verify.reasons));
-        } else if (!observed.verify.verified) {
-          options.onReflex?.(render("verify", "unavailable", observed.verify.reasons));
-        }
-
-        if (observed.sanitize.action === "block") {
-          // A fixed, harness-authored control message — never tool-supplied
-          // text — regardless of whether the blocked result was an error.
-          deliveredExcerpt = `[brainstem] blocked tool output (probable injected instructions): ${observed.sanitize.reasons.join("; ")}`;
-          deliveredTruncated = false;
-          deliveredWhy = `sanitize blocked output: ${observed.sanitize.reasons.join("; ")}`;
-        } else {
-          const notes: string[] = [];
-          if (observed.sanitize.action === "review") {
-            notes.push(`[brainstem] review this content: ${observed.sanitize.reasons.join("; ")}`);
-            deliveredWhy = "sanitize review notes prepended";
-          }
-          if (observed.verify.action === "mismatch") {
-            notes.push(
-              `[brainstem] verify: this output may not satisfy what the tool call was trying to do (${observed.verify.reasons.join("; ")}). Consider a different approach if progress stalls.`,
-            );
-            deliveredWhy ??= "verify notes prepended";
-          } else if (!observed.verify.verified) {
-            notes.push("[brainstem] verify: unavailable — result not verified");
-            deliveredWhy ??= "verify unavailable notes prepended";
-          }
-          if (notes.length > 0) {
-            deliveredExcerpt = `${notes.join("\n")}\n\n${baseView}`;
-          }
-        }
-      }
-
-      // Non-text content is never reviewed by Sanitize/Verify (they only see
-      // `fullText`), so it is always withheld rather than labeling a mixed
-      // result "reviewed" because only its text part passed.
-      if (nonTextCount > 0) {
-        const notice = `[brainstem] ${nonTextCount} non-text content part(s) withheld: unreviewed content types are never delivered.`;
-        deliveredExcerpt = fullText.trim() ? `${deliveredExcerpt}\n\n${notice}` : notice;
-        deliveredWhy ??= "non-text content withheld";
-      }
+      const reviewed = await processOutput({
+        capture: {
+          kind: "captured", sourceId: artifact?.artifactId ?? toolCallId, stream: "output", text: fullText,
+          completeness: artifact ? (artifact.captureComplete ? "complete" : "limited") : "complete",
+          ...(artifact ? { recovery: { sessionId: recorder.sessionId, sourceId: artifact.artifactId, instructions: "use read_output or search_output to recover the rest." } } : {}),
+        },
+        task: taskText(), action: intent, status: obs.status, recent: recorder.recentActivity(5),
+        focus: artifact ? (focusRollout === "on" ? "active" : focusRollout) : "off",
+        nonTextCount, signal: options.signal,
+        fallback: artifact ? (text) => presentArtifact(text, artifact.artifactId, { rollout: "off" }) : undefined,
+      }, {
+        focus: (input, opts) => timedJev(() => engine.focus(input, opts)),
+        observe: (input, opts) => timedJev(() => engine.observeToolResult(input, opts)),
+      });
+      const manifest = reviewed.manifest;
+      const focusDecision = reviewed.focusDecision;
+      if (focusDecision) options.onReflex?.(render("focus", focusDecision.mode, focusDecision.reasons));
+      if (reviewed.sanitize) options.onReflex?.(render("sanitize", reviewed.sanitize.action, reviewed.sanitize.reasons));
+      if (reviewed.verify && (reviewed.verify.action === "mismatch" || !reviewed.verify.verified)) options.onReflex?.(render("verify", reviewed.verify.verified ? reviewed.verify.action : "unavailable", reviewed.verify.reasons));
+      let deliveredExcerpt = reviewed.text;
+      const deliveredTruncated = reviewed.presented.omitted;
+      const deliveredWhy = reviewed.why;
 
       // "(no output)" is presentation wording only — the artifact above (if
       // any) already stored the true, possibly-empty capture. Substituted
