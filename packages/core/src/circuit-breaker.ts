@@ -37,6 +37,10 @@ export class CircuitBreaker {
     return true;
   }
 
+  onCancel(): void {
+    if (this.openedAt !== null) this.probesGranted = Math.max(0, this.probesGranted - 1);
+  }
+
   onSuccess(): void {
     this.failures = 0;
     this.openedAt = null;

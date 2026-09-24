@@ -20,18 +20,24 @@ export type Question = NoulQuestion | ChoiceQuestion | ScoreQuestion;
 
 export type NoulAnswer = { type: "noul"; noul: number };
 
+export type ConfidenceSource = "provider-reported" | "self-reported" | "calibrated" | "unavailable" | "legacy";
+
 export type ChoiceAnswer = {
   type: "choice";
   choice: string;
-  probabilities: Record<string, number>;
-  confidence: number;
+  probabilities: Record<string, number> | null;
+  confidence: number | null;
+  confidenceSource?: ConfidenceSource;
+  calibrationProfile?: string;
 };
 
 export type ScoreAnswer = {
   type: "score";
   score: number;
-  probabilities: Record<string, number>;
-  confidence: number;
+  probabilities: Record<string, number> | null;
+  confidence: number | null;
+  confidenceSource?: ConfidenceSource;
+  calibrationProfile?: string;
 };
 
 export type Answer = NoulAnswer | ChoiceAnswer | ScoreAnswer;
@@ -39,7 +45,7 @@ export type Answer = NoulAnswer | ChoiceAnswer | ScoreAnswer;
 export interface AskResult {
   model: string;
   latencyMs: number;
-  usage: { inputTokens: number; outputTokens: number };
+  usage: { inputTokens: number | null; outputTokens: number | null };
   answers: Record<string, Answer>;
 }
 
@@ -55,6 +61,7 @@ export type JudgmentOutcome =
 
 export interface SystemOne {
   readonly name: string;
+  readonly capabilities?: { confidence: ConfidenceSource; usage: boolean; cancellation: "cooperative" | "local" | "unknown" };
   ask(state: unknown, questions: Record<string, Question>, options?: AskOptions): Promise<AskResult>;
 }
 

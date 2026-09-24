@@ -68,6 +68,19 @@ describe("genericJudge — integration with the real engine", () => {
     });
     const reflexes = createReflexes({ judge, root: "/tmp" });
     const decision = await reflexes.gate({ tool: "bash", command: "echo hi", task: "say hi" });
-    expect(decision.action).toBe("auto");
+    expect(decision.action).toBe("ask");
+    expect(decision.reasons.join(" ")).toContain("confidence");
   });
+});
+
+test("generic answers disclose unknown confidence, distributions and usage", async () => {
+  const judge = genericJudge({ complete: async () => '{"is_safe":0.9,"destructiveness":0,"disposition":"auto_run"}' });
+  const result = await judge.ask({}, QUESTIONS);
+  expect(result.answers.disposition).toMatchObject({ confidence: null, confidenceSource: "unavailable", probabilities: null });
+  expect(result.usage).toEqual({ inputTokens: null, outputTokens: null });
+});
+
+test.each([null, true, "0.9"])("generic numeric answers reject coercion of %s", async (value) => {
+  const judge = genericJudge({ complete: async () => JSON.stringify({ is_safe: value, destructiveness: 0, disposition: "auto_run" }) });
+  await expect(judge.ask({}, QUESTIONS)).rejects.toThrow("expected a number");
 });

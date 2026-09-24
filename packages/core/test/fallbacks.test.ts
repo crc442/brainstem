@@ -88,12 +88,12 @@ describe("engine fallbacks on unavailable judgment", () => {
     expect(decision.reasons).toContain("static floor: risky pattern");
   });
 
-  test("cancelled judgment journals cancelled status and gate asks", async () => {
+  test("provider deadline journals unavailable status and gate asks", async () => {
     const { engine, journalPath } = engineWith(mockSystemOne.hanging(), SHORT_DEADLINE_POLICY);
     const decision = await engine.gate({ tool: "bash", command: "npm test", task: "t" });
     expect(decision.action).toBe("ask");
     const reflex = reflexEvents(journalPath)[0];
-    expect(reflex?.t === "reflex" && reflex.status).toBe("cancelled");
+    expect(reflex?.t === "reflex" && reflex.status).toBe("unavailable");
     expect(reflex?.t === "reflex" && reflex.reason).toContain("deadline");
   });
 

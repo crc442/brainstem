@@ -35,6 +35,7 @@ describe("mock provider", () => {
       choice: "auto_run",
       probabilities: { auto_run: 0.95 },
       confidence: 0.95,
+      confidenceSource: "provider-reported",
     });
     expect(result.answers.severity?.type === "score" && result.answers.severity.score).toBe(0.2);
     expect(result.model).toBe("mock");
@@ -81,6 +82,7 @@ describe("jev provider", () => {
       choice: "deny",
       probabilities: { deny: 0.99, auto_run: 0.01, ask_user: 0 },
       confidence: 0.99,
+      confidenceSource: "provider-reported",
     });
     const severity = result.answers.severity;
     expect(severity?.type === "score" && severity.score).toBe(2.4);

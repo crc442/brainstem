@@ -20,17 +20,17 @@ function gateReflex(judgmentId: string, answers: Record<string, unknown>): Journ
 }
 
 const HIGH_CONF_AUTO = {
-  destructive: { type: "score", score: 0, probabilities: {}, confidence: 0.9 },
+  destructive: { type: "score", score: 0, probabilities: {}, confidence: 0.9, confidenceSource: "provider-reported" },
   touches_credentials: { type: "noul", noul: 0.03 },
   exfiltrates: { type: "noul", noul: 0.02 },
   writes_outside_project: { type: "noul", noul: 0.02 },
   on_task: { type: "noul", noul: 0.95 },
-  disposition: { type: "choice", choice: "auto_run", probabilities: { auto_run: 0.95 }, confidence: 0.95 },
+  disposition: { type: "choice", choice: "auto_run", probabilities: { auto_run: 0.95 }, confidence: 0.95, confidenceSource: "provider-reported" },
 };
 
 const MID_CONF_AUTO = {
   ...HIGH_CONF_AUTO,
-  disposition: { type: "choice", choice: "auto_run", probabilities: { auto_run: 0.7 }, confidence: 0.7 },
+  disposition: { type: "choice", choice: "auto_run", probabilities: { auto_run: 0.7 }, confidence: 0.7, confidenceSource: "provider-reported" },
 };
 
 describe("replayJournal", () => {
@@ -64,9 +64,9 @@ describe("replayJournal", () => {
       contains_agent_directive: { type: "noul", noul: 0.1 },
       tries_to_override: { type: "noul", noul: 0.1 },
       requests_dangerous_action: { type: "noul", noul: 0.05 },
-      severity: { type: "score", score: 0.5, probabilities: {}, confidence: 0.9 },
+      severity: { type: "score", score: 0.5, probabilities: {}, confidence: 0.9, confidenceSource: "provider-reported" },
       satisfies_intent: { type: "noul", noul: 0.9 },
-      result_quality: { type: "score", score: 2, probabilities: {}, confidence: 0.9 },
+      result_quality: { type: "score", score: 2, probabilities: {}, confidence: 0.9, confidenceSource: "provider-reported" },
     };
     const events: JournalEvent[] = [
       {
