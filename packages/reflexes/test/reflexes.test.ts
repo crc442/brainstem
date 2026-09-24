@@ -172,3 +172,17 @@ describe("createReflexes — root default", () => {
     expect(decision.action).toBeDefined();
   });
 });
+
+test("judgment telemetry counts incremental cache usage and does not expose evidence", async () => {
+  const events: import("../src").JudgmentEvent[] = [];
+  const mock = mockSystemOne(AUTO_GATE);
+  const reflexes = createReflexes({ judge: mock, onJudgment: (event) => events.push(event) });
+  const input = { tool: "bash", command: "echo private_fixture_text", task: "test" };
+  await reflexes.gate(input);
+  await reflexes.gate(input);
+  expect(events).toHaveLength(2);
+  expect(events[1]?.cacheHit).toBe(true);
+  expect(events[1]?.cachedFromJudgmentId).toBe(events[0]?.judgmentId);
+  expect(events[1]?.usage).toEqual({ inputTokens: 0, outputTokens: 0 });
+  expect(JSON.stringify(events)).not.toContain("private_fixture_text");
+});

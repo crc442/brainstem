@@ -83,3 +83,7 @@ export interface AskCall {
   state: unknown;
   questions: Record<string, Question>;
 }
+
+export type ReflexMode = "off" | "shadow" | "active";
+export type ReflexName = "select" | "focus" | "messageGate" | "gate" | "sanitize" | "verify" | "pulse" | "steer";
+export type ReflexModes = Partial<Record<ReflexName, ReflexMode>>;

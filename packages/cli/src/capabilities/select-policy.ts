@@ -1,4 +1,4 @@
-import { clearBit, createBitmap, type ReflexEngine, type SelectDecision, type SelectInput } from "@brainstem/core";
+import { clearBit, createBitmap, type ReflexEngine, type ReflexMode, type SelectDecision, type SelectInput } from "@brainstem/core";
 import type { CapabilityRegistry } from "./registry";
 
 export interface SelectTrigger {
@@ -6,6 +6,7 @@ export interface SelectTrigger {
 }
 
 export class SelectDriver {
+  readonly #mode: ReflexMode;
   readonly #registry: CapabilityRegistry;
   readonly #engine: ReflexEngine;
   readonly #minRefreshIntervalMs: number;
@@ -13,8 +14,9 @@ export class SelectDriver {
   #lastCatalogHash?: string;
   #lastRefreshAt = 0;
 
-  constructor(deps: { registry: CapabilityRegistry; engine: ReflexEngine; minRefreshIntervalMs?: number }) {
+  constructor(deps: { registry: CapabilityRegistry; engine: ReflexEngine; minRefreshIntervalMs?: number; mode?: ReflexMode }) {
     this.#registry = deps.registry;
+    this.#mode = deps.mode ?? "active";
     this.#engine = deps.engine;
     this.#minRefreshIntervalMs = deps.minRefreshIntervalMs ?? 5_000;
   }
@@ -29,6 +31,7 @@ export class SelectDriver {
     input: { task: string; recent: string[]; discoveryQuery?: string },
     trigger: SelectTrigger,
   ): Promise<SelectDecision> {
+    if (this.#mode === "off") return { ...emptyDecision(this.#registry.snapshot()), status: "unavailable" };
     const now = Date.now();
     if (!this.shouldRefresh(trigger, now)) {
       return this.#lastDecision ?? emptyDecision(this.#registry.snapshot());
@@ -54,6 +57,7 @@ export class SelectDriver {
       discoveryQuery: input.discoveryQuery,
     };
     const decision = await this.#engine.select(selectInput);
+    if (this.#mode === "shadow") return { ...emptyDecision(catalog), status: "unavailable" };
     this.#lastDecision = decision;
     return decision;
   }

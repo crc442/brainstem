@@ -55,6 +55,7 @@ export type JournalEvent =
       state: unknown;
       questions: Record<string, Question>;
       result: AskResult | null;
+      answerSchema?: 2;
       reason?: string;
       // Present only on a cache hit — absent (not `false`) on every fresh call.
       cacheHit?: boolean;

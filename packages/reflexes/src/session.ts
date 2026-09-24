@@ -1,13 +1,14 @@
 import {
   compileCatalog, workingSetFromIds, computeActive, activeIds, fromIds, hashAction, newId, boundForReview,
+  type ReflexMode, type ReflexName, type ReflexModes,
   type CapabilityDescriptor, type AskOptions, type GateInput, type GateDecision, type MessageGateInput,
   type SteerInput, type SteerDecision, type PulseDecision,
 } from "@brainstem/core";
 import type { Reflexes, PulseInput } from "./index";
 
-export type ReflexMode = "off" | "shadow" | "active";
-export type PluginFlow = "select" | "focus" | "messageGate" | "gate" | "sanitize" | "verify" | "pulse" | "steer";
-export type PluginModes = Partial<Record<PluginFlow, ReflexMode>>;
+export type { ReflexMode };
+export type PluginFlow = ReflexName;
+export type PluginModes = ReflexModes;
 export interface PluginEvent {
   sessionId: string;
   revision: number;
