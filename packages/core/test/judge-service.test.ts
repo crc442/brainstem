@@ -8,7 +8,7 @@ test("legacy and unavailable confidence cannot approve or route; zero remains di
     { type: "choice" as const, choice: "auto_run", confidence: null, confidenceSource: "unavailable" as const, probabilities: null },
   ]) {
     expect(decideGate({ disposition: answer }, policy).action).toBe("ask");
-    expect(decideSteer({ tier: { ...answer, choice: "mini" } }, policy).tier).toBe("frontier");
+    expect(decideSteer({ model_tier: { ...answer, choice: "mini" } }, policy).tier).toBe("frontier");
   }
   expect(decideGate({ disposition: choiceAnswer("auto_run", 0) }, policy).action).toBe("ask");
   expect(decideGate({ disposition: choiceAnswer("auto_run", 1) }, policy).action).toBe("auto");
