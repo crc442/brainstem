@@ -21,7 +21,7 @@ describe("gateQuestions", () => {
         expect(question.criteria).toHaveLength(4);
       }
     }
-    expect(q.destructive?.instructions).toContain("`action.command`");
+    expect(q.destructive?.instructions).toContain("`action`");
     expect(q.disposition?.instructions).toContain("`task`");
   });
 });

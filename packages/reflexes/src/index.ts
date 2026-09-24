@@ -1,5 +1,12 @@
 import {
   ReflexEngine,
+  processOutput, type OutputPipelineInput, type ReviewedOutput,
+  BoundedAnswerCache,
+  type AskOptions,
+  type SelectInput, type SelectDecision,
+  type SteerInput, type SteerOptions, type SteerDecision,
+  type MessageGateInput, type PulseDecision,
+  type AnswerCache,
   policyForTrust,
   openJournal,
   newId,
@@ -27,7 +34,7 @@ export { jevJudge } from "./judges/jev";
 export { genericJudge } from "./judges/generic";
 
 export interface ReflexDecisionEvent {
-  reflex: "gate" | "sanitize" | "verify" | "focus";
+  reflex: "gate" | "sanitize" | "verify" | "focus" | "select" | "pulse" | "steer" | "message_gate";
   action: string;
   reasons: string[];
   judgmentId?: string;
@@ -36,6 +43,9 @@ export interface ReflexDecisionEvent {
 export interface ReflexesOptions {
   /** The only required option. Any SystemOne implementation works — see jevJudge / genericJudge. */
   judge: SystemOne;
+  signal?: AbortSignal;
+  maxJudgmentCalls?: number;
+  cache?: AnswerCache;
   /** Default: process.cwd(). Used by Gate's static floor path checks. */
   root?: string;
   /**
@@ -67,10 +77,19 @@ export interface FocusResult {
   sectionManifestHash: string;
 }
 
+export type ObserveOptions = AskOptions & { sanitize?: boolean; verify?: boolean };
+export type PulseInput = Parameters<ReflexEngine["pulse"]>[0];
+
 export interface Reflexes {
-  gate(input: GateInput): Promise<GateDecision & { result?: AskResult }>;
-  observe(input: ObserveToolResultInput): Promise<{ sanitize: SanitizeDecision; verify: VerifyDecision }>;
-  focus(input: FocusLibraryInput): Promise<FocusResult>;
+  processOutput(input: OutputPipelineInput): Promise<ReviewedOutput>;
+  select(input: SelectInput, options?: AskOptions): Promise<SelectDecision>;
+  messageGate(input: MessageGateInput, options?: AskOptions): Promise<GateDecision & { result?: AskResult }>;
+  pulse(input: PulseInput, options?: AskOptions): Promise<PulseDecision>;
+  steer(input: SteerInput, options?: SteerOptions): Promise<SteerDecision>;
+  resetTask(): void;
+  gate(input: GateInput, options?: AskOptions): Promise<GateDecision & { result?: AskResult }>;
+  observe(input: ObserveToolResultInput, options?: ObserveOptions): Promise<{ sanitize: SanitizeDecision; verify: VerifyDecision }>;
+  focus(input: FocusLibraryInput, options?: AskOptions): Promise<FocusResult>;
 }
 
 export function createReflexes(options: ReflexesOptions): Reflexes {
@@ -80,6 +99,9 @@ export function createReflexes(options: ReflexesOptions): Reflexes {
 
   const engine = new ReflexEngine({
     systemOne: options.judge,
+    signal: options.signal,
+    maxJudgmentCalls: options.maxJudgmentCalls,
+    cache: options.cache ?? new BoundedAnswerCache(),
     journal,
     policy,
     root: options.root ?? process.cwd(),
@@ -90,23 +112,51 @@ export function createReflexes(options: ReflexesOptions): Reflexes {
   const emit = (event: ReflexDecisionEvent): void => options.onDecision?.(event);
 
   return {
-    async gate(input) {
-      const decision = await engine.gate(input);
+    resetTask: () => engine.resetTask(),
+    async processOutput(input) {
+      const result = await processOutput(input, { focus: (i, o) => engine.focus(i, o), observe: (i, o) => engine.observeToolResult(i, o) });
+      if (result.focusDecision) emit({ reflex: "focus", action: result.focusDecision.mode, reasons: result.focusDecision.reasons });
+      if (result.sanitize) emit({ reflex: "sanitize", action: result.sanitize.action, reasons: result.sanitize.reasons });
+      if (result.verify) emit({ reflex: "verify", action: result.verify.action, reasons: result.verify.reasons });
+      return result;
+    },
+    async select(input, opts) {
+      const decision = await engine.select(input, opts);
+      emit({ reflex: "select", action: decision.status, reasons: [] });
+      return decision;
+    },
+    async messageGate(input, opts) {
+      const decision = await engine.messageGate(input, opts);
+      emit({ reflex: "message_gate", action: decision.action, reasons: decision.reasons });
+      return decision;
+    },
+    async pulse(input, opts) {
+      const decision = await engine.pulse(input, opts);
+      emit({ reflex: "pulse", action: decision.action, reasons: decision.reasons });
+      return decision;
+    },
+    async steer(input, opts) {
+      const decision = await engine.steer(input, opts);
+      emit({ reflex: "steer", action: decision.tier, reasons: decision.reasons });
+      return decision;
+    },
+    async gate(input, opts) {
+      const decision = await engine.gate(input, opts);
       emit({ reflex: "gate", action: decision.action, reasons: decision.reasons });
       return decision;
     },
 
-    async observe(input) {
-      const { sanitize, verify } = await engine.observeToolResult(input);
-      emit({ reflex: "sanitize", action: sanitize.action, reasons: sanitize.reasons });
-      emit({ reflex: "verify", action: verify.action, reasons: verify.reasons });
+    async observe(input, opts) {
+      const { sanitize, verify } = await engine.observeToolResult(input, opts);
+      if (opts?.sanitize !== false) emit({ reflex: "sanitize", action: sanitize.action, reasons: sanitize.reasons });
+      if (opts?.verify !== false) emit({ reflex: "verify", action: verify.action, reasons: verify.reasons });
       return { sanitize, verify };
     },
 
-    async focus(input) {
+    async focus(input, opts) {
       const { content, artifactId, budgetChars, ...rest } = input;
       const manifest = splitIntoSections(artifactId ?? "reflexes:focus", content);
-      const decision = await engine.focus({ ...rest, manifest, budgetChars: budgetChars ?? DEFAULT_FOCUS_BUDGET_CHARS });
+      const decision = await engine.focus({ ...rest, manifest, budgetChars: budgetChars ?? DEFAULT_FOCUS_BUDGET_CHARS }, opts);
       emit({ reflex: "focus", action: decision.mode, reasons: decision.reasons });
 
       if (decision.mode !== "select") {
@@ -126,3 +176,9 @@ export function createReflexes(options: ReflexesOptions): Reflexes {
     },
   };
 }
+
+export type { AskOptions, SelectInput, SelectDecision, SteerInput, SteerOptions, SteerDecision, MessageGateInput, PulseDecision };
+export { createPluginSession } from "./session";
+export type { PluginSession, PluginSessionOptions, PluginModes, PluginFlow, PluginEvent, ReflexMode, CapabilityContext, CapabilityRecommendation, GateReview } from "./session";
+
+export type { CapturedOutput, PresentedOutput, ReviewedOutput, OutputPipelineInput } from "@brainstem/core";
