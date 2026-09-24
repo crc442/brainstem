@@ -4,6 +4,8 @@ import type { SystemOne } from "./types";
 
 /** Bounds local waiting, not remote compute or host execution. One instance per provider/session. */
 export function judgmentService(provider: SystemOne, options: { deadlineMs: number; maxCalls?: number; breaker: CircuitBreaker }): SystemOne {
+  if (options.maxCalls !== undefined && (!Number.isInteger(options.maxCalls) || options.maxCalls < 0)) throw new Error("maxJudgmentCalls must be a non-negative integer");
+  if (!Number.isFinite(options.deadlineMs) || options.deadlineMs <= 0) throw new Error("judgment deadline must be positive");
   let calls = 0;
   return {
     name: provider.name,

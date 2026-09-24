@@ -10,6 +10,8 @@ export const FOCUS_PRESENT_BUDGET_CHARS = 4_000;
 
 export interface PresentedView {
   text: string;
+  /** Exact prefix from the source before any host-authored receipt. */
+  sourcePrefixChars?: number;
   truncated: boolean;
   presentedAs: "naive" | "focus_full" | "focus_select" | "focus_compute_or_retrieve";
 }
@@ -35,11 +37,12 @@ export function presentNaive(fullText: string, artifactId: string, lineCap: numb
   const bounded = boundForReview(candidate, REVIEW_CHAR_CAP);
 
   if (!lineTruncated && !bounded.truncated) {
-    return { text: fullText, truncated: false, presentedAs: "naive" };
+    return { text: fullText, sourcePrefixChars: fullText.length, truncated: false, presentedAs: "naive" };
   }
 
   if (lineTruncated && !bounded.truncated) {
     return {
+      sourcePrefixChars: slice.text.length,
       text: `${slice.text}\n${NAIVE_NOTICE(artifactId, lineCap, slice.totalLines)}`,
       truncated: true,
       presentedAs: "naive",
@@ -49,7 +52,7 @@ export function presentNaive(fullText: string, artifactId: string, lineCap: numb
   const notice = lineTruncated
     ? `${NAIVE_CHAR_NOTICE(artifactId, bounded.shownChars, candidate.length)} (also beyond the ${lineCap}-line window; ${slice.totalLines} lines total)`
     : NAIVE_CHAR_NOTICE(artifactId, bounded.shownChars, candidate.length);
-  return { text: `${bounded.text}\n${notice}`, truncated: true, presentedAs: "naive" };
+  return { text: `${bounded.text}\n${notice}`, sourcePrefixChars: bounded.shownChars, truncated: true, presentedAs: "naive" };
 }
 
 export function presentFocused(

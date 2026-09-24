@@ -1,5 +1,5 @@
 import {
-  compileCatalog, workingSetFromIds, computeActive, activeIds, fromIds, hashAction, newId, boundForReview,
+  compileCatalog, workingSetFromIds, computeActive, activeIds, fromIds, hashAction, boundForReview,
   type ReflexMode, type ReflexName, type ReflexModes,
   type CapabilityDescriptor, type AskOptions, type GateInput, type GateDecision, type MessageGateInput,
   type SteerInput, type SteerDecision, type PulseDecision,
@@ -49,11 +49,11 @@ export interface PluginSessionOptions {
 }
 
 /** A host-owned wait remains cancellable locally; it cannot imply a remote approval was revoked. */
-async function abortable<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
+export async function waitForHost<T>(work: () => Promise<T>, signal: AbortSignal): Promise<T> {
   if (signal.aborted) throw new Error("plugin operation cancelled");
   let abort: () => void = () => {};
   try {
-    return await Promise.race([work, new Promise<never>((_, reject) => {
+    return await Promise.race([Promise.resolve().then(work), new Promise<never>((_, reject) => {
       abort = () => reject(new Error("plugin operation cancelled"));
       signal.addEventListener("abort", abort, { once: true });
     })]);
@@ -61,7 +61,7 @@ async function abortable<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
 }
 
 export function createPluginSession(reflexes: Reflexes, options: PluginSessionOptions = {}) {
-  const sessionId = newId("plugin");
+  const sessionId = reflexes.sessionId;
   let revision = 0;
   let taskId: string | undefined;
   let task = "unspecified";
@@ -70,6 +70,8 @@ export function createPluginSession(reflexes: Reflexes, options: PluginSessionOp
   const modes: Record<PluginFlow, ReflexMode> = {
     select: "off", focus: "off", messageGate: "off", gate: "active", sanitize: "active", verify: "active", pulse: "off", steer: "off", ...options.modes,
   };
+  for (const value of Object.values(modes)) if (!["off", "shadow", "active"].includes(value)) throw new Error("invalid reflex mode");
+  Object.freeze(modes);
   const event = (flow: PluginFlow, phase: PluginEvent["phase"], outcome: string, durationMs?: number, subjectId?: string, atRevision = revision) =>
     options.onEvent?.({ sessionId, revision: atRevision, flow, mode: modes[flow], phase, outcome, durationMs, subjectId });
   const scope = (signal?: AbortSignal) => {
@@ -77,13 +79,13 @@ export function createPluginSession(reflexes: Reflexes, options: PluginSessionOp
     const signals = [controller.signal, options.signal, signal].filter((s): s is AbortSignal => !!s);
     const combined = AbortSignal.any(signals);
     const atRevision = revision;
-    return { signal: combined, revision: atRevision, current: () => !disposed && revision === atRevision && !combined.aborted };
+    return { signal: combined, revision: atRevision, taskId, current: () => !disposed && revision === atRevision && !combined.aborted };
   };
   async function judge<T>(flow: PluginFlow, run: (opts: AskOptions) => Promise<T>, signal?: AbortSignal) {
     const s = scope(signal);
     if (!s.current()) throw new Error("plugin operation cancelled");
     const start = performance.now();
-    const result = await run({ signal: s.signal });
+    const result = await run({ signal: s.signal, context: { taskId, revision: s.revision } });
     if (!s.current()) throw new Error("stale plugin result");
     event(flow, "judged", "completed", performance.now() - start, undefined, s.revision);
     return result;
@@ -99,7 +101,7 @@ export function createPluginSession(reflexes: Reflexes, options: PluginSessionOp
       allowed = decision.action === "auto";
       if (decision.action === "ask" && options.approve) {
         // Callback receives a separate copy; its mutations cannot change the reviewed subject.
-        allowed = await abortable(Promise.resolve(options.approve({ subjectId, revision: s.revision, subject: structuredClone(snapshot), decision: structuredClone(decision) }, s.signal)), s.signal);
+        allowed = await waitForHost(() => options.approve!({ subjectId, revision: s.revision, subject: structuredClone(snapshot), decision: structuredClone(decision) }, s.signal), s.signal);
       }
     }
     if (!s.current() || hashAction(input) !== subjectId) allowed = false;
@@ -114,7 +116,7 @@ export function createPluginSession(reflexes: Reflexes, options: PluginSessionOp
     async prepareMessage(input: MessageGateInput & { taskId: string; capabilities?: CapabilityContext }, signal?: AbortSignal) {
       if (disposed) throw new Error("plugin session disposed");
       controller.abort(); controller = new AbortController(); revision++;
-      if (taskId !== input.taskId) { reflexes.resetTask(); taskId = input.taskId; }
+      if (taskId !== input.taskId || task !== input.task) { reflexes.resetTask(); taskId = input.taskId; }
       task = input.task;
       const s = scope(signal);
       const messageSubject = { message: input.message, task: input.task, constraints: [...input.constraints], evidence: structuredClone(input.evidence) };

@@ -14,6 +14,8 @@ export interface CapturedOutput {
   sourceId: string;
   stream: string;
   text: string;
+  /** Optional mapping from combined rendered bytes into retained named streams. */
+  segments?: { stream: string; start: number; end: number; sourceStart: number }[];
   completeness: "complete" | "limited" | "unknown";
   recovery?: { sessionId: string; sourceId: string; instructions: string };
 }
@@ -53,8 +55,9 @@ export interface OutputPipelineInput {
   verify?: OutputMode;
   nonTextCount?: number;
   signal?: AbortSignal;
+  context?: AskOptions["context"];
   /** Host-authored bounded presentation, e.g. the reference CLI's pagination receipt. */
-  fallback?: (text: string) => { text: string; truncated: boolean };
+  fallback?: (text: string) => { text: string; truncated: boolean; sourcePrefixChars?: number };
   candidateCap?: number;
 }
 
@@ -71,7 +74,7 @@ export async function processOutput(input: OutputPipelineInput, deps: OutputPipe
   let decision: FocusDecision | undefined;
   if (focusMode !== "off" && candidate.text.trim()) {
     manifest = splitIntoSections(capture.sourceId, candidate.text);
-    decision = await deps.focus({ task: input.task, command: input.action, intent: input.action, outcome: input.status, recentFindings: input.recent ?? [], manifest, budgetChars: 4000 }, { signal: input.signal });
+    decision = await deps.focus({ task: input.task, command: input.action, intent: input.action, outcome: input.status, recentFindings: input.recent ?? [], manifest, budgetChars: 4000 }, { signal: input.signal, context: input.context });
     alive();
   }
   const selected = focusMode === "active" && decision?.mode === "select" && manifest
@@ -80,6 +83,7 @@ export async function processOutput(input: OutputPipelineInput, deps: OutputPipe
   let candidateText: string;
   let omitted: boolean;
   let rangeCoverage: "known" | "unknown" = "known";
+  let fallbackPrefix: number | undefined;
   if (selected?.length) {
     candidateText = selected.map((s) => s.text).join("\n\n");
     omitted = candidate.truncated || selected.length < manifest!.entries.length;
@@ -88,7 +92,9 @@ export async function processOutput(input: OutputPipelineInput, deps: OutputPipe
     const fallback = input.fallback(capture.text);
     candidateText = fallback.text; omitted = fallback.truncated;
     // Custom host presentation may contain labels and noncontiguous excerpts.
-    rangeCoverage = "unknown";
+    fallbackPrefix = fallback.sourcePrefixChars;
+    if (fallbackPrefix === undefined) rangeCoverage = "unknown";
+    else ranges = [{ sourceId: capture.sourceId, stream: capture.stream, unit: "utf8-byte", start: 0, end: Buffer.byteLength(capture.text.slice(0, fallbackPrefix)) }];
   } else {
     candidateText = capture.text; omitted = false;
     ranges = [{ sourceId: capture.sourceId, stream: capture.stream, unit: "utf8-byte", start: 0, end: Buffer.byteLength(capture.text) }];
@@ -104,6 +110,20 @@ export async function processOutput(input: OutputPipelineInput, deps: OutputPipe
       return length > 0 ? [{ ...range, end: range.start + length }] : [];
     });
   }
+  if (capture.segments && rangeCoverage === "known") {
+    let lastEnd = 0;
+    for (const segment of capture.segments) {
+      if (![segment.start, segment.end, segment.sourceStart].every(Number.isInteger) || segment.start < lastEnd || segment.end < segment.start || segment.sourceStart < 0 || segment.end > Buffer.byteLength(capture.text)) throw new Error("invalid output source map");
+      lastEnd = segment.end;
+    }
+    const combinedBytes = ranges.reduce((sum, r) => sum + r.end - r.start, 0);
+    ranges = ranges.flatMap((range) => capture.segments!.flatMap((segment) => {
+      const start = Math.max(range.start, segment.start);
+      const end = Math.min(range.end, segment.end);
+      return start < end ? [{ ...range, stream: segment.stream, start: start - segment.start + segment.sourceStart, end: end - segment.start + segment.sourceStart }] : [];
+    }));
+    if (ranges.reduce((sum, r) => sum + r.end - r.start, 0) !== combinedBytes) rangeCoverage = "unknown";
+  }
   const presented: PresentedOutput = {
     kind: "presented", text: bounded.text, hash: contentHash(bounded.text), source: capture, ranges, rangeCoverage,
     omitted, candidateCoverage: candidate.truncated || manifest?.entries.some((s) => s.text.length > 2000) ? "limited" : "complete",
@@ -113,7 +133,7 @@ export async function processOutput(input: OutputPipelineInput, deps: OutputPipe
   let text = bounded.text;
   let why: string | undefined;
   if (text.trim() && (sanitizeMode !== "off" || verifyMode !== "off")) {
-    const observed = await deps.observe({ task: input.task, source: `tool:${capture.sourceId}`, actionSummary: input.action, intent: input.action, status: input.status, truncated: omitted || capture.completeness !== "complete", content: text }, { signal: input.signal, sanitize: sanitizeMode !== "off", verify: verifyMode !== "off" });
+    const observed = await deps.observe({ task: input.task, source: `tool:${capture.sourceId}`, actionSummary: input.action, intent: input.action, status: input.status, truncated: omitted || capture.completeness !== "complete", content: text }, { signal: input.signal, context: input.context, sanitize: sanitizeMode !== "off", verify: verifyMode !== "off" });
     alive();
     sanitize = sanitizeMode !== "off" ? observed.sanitize : undefined;
     verify = verifyMode !== "off" ? observed.verify : undefined;
@@ -139,5 +159,8 @@ export async function processOutput(input: OutputPipelineInput, deps: OutputPipe
   if (input.nonTextCount && (sanitizeMode === "active" || verifyMode === "active")) { notes.push(`[brainstem] ${input.nonTextCount} non-text content part(s) withheld: unreviewed content types are never delivered.`); why ??= "non-text content withheld"; }
   if (notes.length) text = [text, ...notes].filter(Boolean).join("\n\n");
   alive();
-  return { kind: "reviewed", presented, text, sanitize, verify, review: { sanitize: sanitizeMode, verify: verifyMode }, focusDecision: decision, manifest, why };
+  Object.freeze(capture.recovery);
+  Object.freeze(capture);
+  ranges.forEach(Object.freeze); Object.freeze(ranges); Object.freeze(presented);
+  return Object.freeze({ kind: "reviewed", presented, text, sanitize, verify, review: { sanitize: sanitizeMode, verify: verifyMode }, focusDecision: decision, manifest, why });
 }

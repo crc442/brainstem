@@ -38,11 +38,14 @@ export interface ReflexDecisionEvent {
   action: string;
   reasons: string[];
   judgmentId?: string;
+  sessionId?: string;
 }
 
 export interface JudgmentEvent {
   sessionId: string;
   judgmentId: string;
+  taskId?: string;
+  revision?: number;
   reflex: string;
   status: "completed" | "unavailable" | "cancelled";
   model?: string;
@@ -96,6 +99,7 @@ export type ObserveOptions = AskOptions & { sanitize?: boolean; verify?: boolean
 export type PulseInput = Parameters<ReflexEngine["pulse"]>[0];
 
 export interface Reflexes {
+  readonly sessionId: string;
   processOutput(input: OutputPipelineInput): Promise<ReviewedOutput>;
   select(input: SelectInput, options?: AskOptions): Promise<SelectDecision>;
   messageGate(input: MessageGateInput, options?: AskOptions): Promise<GateDecision & { result?: AskResult }>;
@@ -108,11 +112,13 @@ export interface Reflexes {
 }
 
 export function createReflexes(options: ReflexesOptions): Reflexes {
+  const sessionId = newId("sess");
   const sink = options.journalPath ? openJournal(options.journalPath) : undefined;
   const journal: Journal = { append(event: JournalEvent) {
     sink?.append(event);
+    if (event.t === "decision") options.onDecision?.({ reflex: event.reflex as ReflexDecisionEvent["reflex"], action: event.action, reasons: event.reasons, judgmentId: event.judgmentId, sessionId });
     if (event.t === "reflex") {
-      options.onJudgment?.({ sessionId: event.sessionId, judgmentId: event.judgmentId, reflex: event.reflex, status: event.status,
+      options.onJudgment?.({ sessionId: event.sessionId, judgmentId: event.judgmentId, reflex: event.reflex, status: event.status, taskId: event.taskId, revision: event.revision,
         model: event.result?.model, durationMs: event.cacheHit ? 0 : event.result?.latencyMs,
         usage: event.cacheHit ? { inputTokens: 0, outputTokens: 0 } : event.result?.usage ?? { inputTokens: null, outputTokens: null },
         cacheHit: event.cacheHit === true, cachedFromJudgmentId: event.cachedFromJudgmentId, answerSchema: 2,
@@ -120,8 +126,6 @@ export function createReflexes(options: ReflexesOptions): Reflexes {
     }
   } };
   const policy: Policy = { ...policyForTrust(0.3), ...options.policy };
-  const sessionId = newId("sess");
-
   const engine = new ReflexEngine({
     systemOne: options.judge,
     signal: options.signal,
@@ -134,47 +138,36 @@ export function createReflexes(options: ReflexesOptions): Reflexes {
     ids: () => ({ sessionId }),
   });
 
-  const emit = (event: ReflexDecisionEvent): void => options.onDecision?.(event);
-
   return {
+    sessionId,
     resetTask: () => engine.resetTask(),
     async processOutput(input) {
       const result = await processOutput(input, { focus: (i, o) => engine.focus(i, o), observe: (i, o) => engine.observeToolResult(i, o) });
-      if (result.focusDecision) emit({ reflex: "focus", action: result.focusDecision.mode, reasons: result.focusDecision.reasons });
-      if (result.sanitize) emit({ reflex: "sanitize", action: result.sanitize.action, reasons: result.sanitize.reasons });
-      if (result.verify) emit({ reflex: "verify", action: result.verify.action, reasons: result.verify.reasons });
       return result;
     },
     async select(input, opts) {
       const decision = await engine.select(input, opts);
-      emit({ reflex: "select", action: decision.status, reasons: [] });
       return decision;
     },
     async messageGate(input, opts) {
       const decision = await engine.messageGate(input, opts);
-      emit({ reflex: "message_gate", action: decision.action, reasons: decision.reasons });
       return decision;
     },
     async pulse(input, opts) {
       const decision = await engine.pulse(input, opts);
-      emit({ reflex: "pulse", action: decision.action, reasons: decision.reasons });
       return decision;
     },
     async steer(input, opts) {
       const decision = await engine.steer(input, opts);
-      emit({ reflex: "steer", action: decision.tier, reasons: decision.reasons });
       return decision;
     },
     async gate(input, opts) {
       const decision = await engine.gate(input, opts);
-      emit({ reflex: "gate", action: decision.action, reasons: decision.reasons });
       return decision;
     },
 
     async observe(input, opts) {
       const { sanitize, verify } = await engine.observeToolResult(input, opts);
-      if (opts?.sanitize !== false) emit({ reflex: "sanitize", action: sanitize.action, reasons: sanitize.reasons });
-      if (opts?.verify !== false) emit({ reflex: "verify", action: verify.action, reasons: verify.reasons });
       return { sanitize, verify };
     },
 
@@ -182,7 +175,6 @@ export function createReflexes(options: ReflexesOptions): Reflexes {
       const { content, artifactId, budgetChars, ...rest } = input;
       const manifest = splitIntoSections(artifactId ?? "reflexes:focus", content);
       const decision = await engine.focus({ ...rest, manifest, budgetChars: budgetChars ?? DEFAULT_FOCUS_BUDGET_CHARS }, opts);
-      emit({ reflex: "focus", action: decision.mode, reasons: decision.reasons });
 
       if (decision.mode !== "select") {
         // "full" and "compute_or_retrieve" both mean: this library has no
@@ -203,7 +195,7 @@ export function createReflexes(options: ReflexesOptions): Reflexes {
 }
 
 export type { AskOptions, SelectInput, SelectDecision, SteerInput, SteerOptions, SteerDecision, MessageGateInput, PulseDecision };
-export { createPluginSession } from "./session";
+export { createPluginSession, waitForHost } from "./session";
 export type { PluginSession, PluginSessionOptions, PluginModes, PluginFlow, PluginEvent, ReflexMode, CapabilityContext, CapabilityRecommendation, GateReview } from "./session";
 
 export type { CapturedOutput, PresentedOutput, ReviewedOutput, OutputPipelineInput } from "@brainstem/core";

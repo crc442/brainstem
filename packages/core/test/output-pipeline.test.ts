@@ -34,3 +34,15 @@ test("shadow decisions do not select, block, or annotate a complete benign-sized
   const result = await processOutput({ capture: capture("hello"), task: "t", action: "read", status: "ok", focus: "shadow", sanitize: "shadow", verify: "shadow" }, { ...deps, observe: async () => ({ sanitize: { action: "block", reasons: ["bad"] }, verify: { action: "mismatch", reasons: ["bad"], verified: true } }) });
   expect(result.text).toBe("hello");
 });
+
+test("selected combined output maps back to the named stderr stream", async () => {
+  const stdout = "noise\n\n";
+  const stderr = "FAIL 😀";
+  const source = { ...capture(stdout + stderr), segments: [
+    { stream: "stdout", start: 0, end: Buffer.byteLength(stdout), sourceStart: 0 },
+    { stream: "stderr", start: Buffer.byteLength(stdout), end: Buffer.byteLength(stdout + stderr), sourceStart: 0 },
+  ] };
+  const result = await processOutput({ capture: source, task: "error", action: "test", status: "error", focus: "active" }, deps);
+  expect(result.presented.ranges).toEqual([{ sourceId: "log", stream: "stderr", unit: "utf8-byte", start: 0, end: Buffer.byteLength(stderr) }]);
+  expect(Object.isFrozen(result.presented)).toBe(true);
+});

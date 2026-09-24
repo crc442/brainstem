@@ -33,7 +33,7 @@ function decisionWith(
 describe("presentNaive", () => {
   test("short content is shown in full, not truncated", () => {
     const view = presentNaive("line1\nline2\nline3", "art_1");
-    expect(view).toEqual({ text: "line1\nline2\nline3", truncated: false, presentedAs: "naive" });
+    expect(view).toEqual({ text: "line1\nline2\nline3", sourcePrefixChars: 17, truncated: false, presentedAs: "naive" });
   });
 
   test("content over the line cap is truncated with the exact recovery notice", () => {

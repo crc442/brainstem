@@ -174,7 +174,7 @@ describe("engine fallbacks on unavailable judgment", () => {
     expect(reflex?.t === "reflex" && reflex.status).toBe("unavailable");
   });
 
-  test("malformed answers count as unavailable, never as data", async () => {
+  test("malformed answers are unavailable, with usage preserved for accounting", async () => {
     const provider = mockSystemOne(() => ({ ...gateAnswers(), sneaky: { type: "noul", noul: 0.5 } }));
     const { engine, journalPath } = engineWith(provider);
     const decision = await engine.gate({ tool: "bash", command: "npm test", task: "t" });
@@ -183,7 +183,7 @@ describe("engine fallbacks on unavailable judgment", () => {
     const reflex = reflexEvents(journalPath)[0];
     expect(reflex?.t === "reflex" && reflex.status).toBe("unavailable");
     expect(reflex?.t === "reflex" && reflex.reason).toContain("unknown answer id");
-    expect(reflex?.t === "reflex" && reflex.result).toBeNull();
+    expect(reflex?.t === "reflex" && reflex.result?.usage).toEqual({ inputTokens: 0, outputTokens: 0 });
   });
 
   test("completed judgments still verify positively", async () => {

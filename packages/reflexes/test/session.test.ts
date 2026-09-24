@@ -70,3 +70,13 @@ test("Sanitize and Verify can be evaluated independently", async () => {
   await reflexes.observe({ task: "t", source: "test", actionSummary: "run tests", content: "passed" }, { sanitize: false, verify: false });
   expect(provider.calls).toHaveLength(1);
 });
+
+test("judgment and application telemetry share the session and message revision", async () => {
+  const judgments: import("../src").JudgmentEvent[] = [];
+  const applied: import("../src").PluginEvent[] = [];
+  const reflexes = createReflexes({ judge: mockSystemOne(() => ({ disposition: choiceAnswer("auto_run", 1) })), onJudgment: (event) => judgments.push(event) });
+  const session = createPluginSession(reflexes, { modes: { messageGate: "active" }, onEvent: (event) => applied.push(event) });
+  await session.prepareMessage({ taskId: "task-one", task: "hi", message: "hi", constraints: [] });
+  expect(judgments[0]).toMatchObject({ sessionId: session.sessionId, taskId: "task-one", revision: 1 });
+  expect(applied.find((e) => e.phase === "applied")).toMatchObject({ sessionId: session.sessionId, revision: 1, outcome: "allow" });
+});
