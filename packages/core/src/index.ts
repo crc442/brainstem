@@ -69,6 +69,7 @@ export { ReflexEngine, decideGate, decideSanitize, decideVerify, decidePulse, de
 export type {
   GateDecision,
   GateInput,
+  MessageGateInput,
   GateAction,
   SanitizeDecision,
   SanitizeAction,
@@ -137,3 +138,5 @@ export { computeCacheKey, BoundedAnswerCache } from "./cache";
 export type { AnswerCache, AnswerCacheEntry, BoundedAnswerCacheOptions } from "./cache";
 
 export { judgmentService } from "./judge-service";
+export { processOutput } from "./output-pipeline";
+export type { CapturedOutput, PresentedOutput, ReviewedOutput, SourceRange, OutputPipelineInput, OutputPipelineDeps, OutputMode } from "./output-pipeline";
