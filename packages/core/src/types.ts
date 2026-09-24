@@ -50,6 +50,7 @@ export interface AskResult {
 }
 
 export interface AskOptions {
+  context?: { taskId?: string; revision?: number };
   signal?: AbortSignal;
   deadlineMs?: number;
 }

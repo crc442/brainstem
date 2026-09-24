@@ -41,7 +41,7 @@ test("prompt wrapper loads and uses a suggested tool, routes actual requests, th
   const plugin = attachReflexes(agent, createReflexes({ judge: provider() }), {
     cwd: "/tmp", modes: { select: "active", steer: "active", messageGate: "active" }, miniModel: { id: "mini" } as never,
     capabilities: () => ({ catalog: [desc], available: ["browser"], baseline: [] }),
-    applyCapabilities: (r) => { applications++; agent.state.tools = r.ids.includes("browser") ? [tool("browser", "UI inspected", () => executions++)] : []; },
+    loadCapabilities: async (r) => { applications++; return { tools: r.ids.includes("browser") ? [tool("browser", "UI inspected", () => executions++)] : [] }; },
   });
   await plugin.prompt("inspect the UI");
   expect(executions).toBe(1);
@@ -161,5 +161,29 @@ test("host recovery delivers a large stored page without re-executing the source
   expect(JSON.stringify(seen[1]?.context)).not.toContain("LATE_FACT");
   expect(JSON.stringify(seen[2]?.context)).toContain("LATE_FACT");
   expect(sourceCalls).toBe(1);
+  plugin.dispose();
+});
+
+test("disposing during capability loading discards the result before tools reach the agent", async () => {
+  let ready!: () => void;
+  const loading = new Promise<void>((resolve) => { ready = resolve; });
+  let complete!: (value: { tools: AgentTool[] }) => void;
+  const agent = new Agent({ streamFn: scripted([done], []), initialState: { tools: [] } });
+  const plugin = attachReflexes(agent, createReflexes({ judge: provider() }), {
+    cwd: "/tmp", modes: { select: "active" }, capabilities: () => ({ catalog: [desc], available: ["browser"], baseline: [] }),
+    loadCapabilities: () => new Promise((resolve) => { complete = resolve; ready(); }),
+  });
+  const pending = plugin.prompt("inspect browser");
+  await loading;
+  plugin.dispose();
+  complete({ tools: [tool("browser", "late")] });
+  await expect(pending).rejects.toThrow(/cancel/);
+  expect(agent.state.tools).toHaveLength(0);
+});
+
+test("foreign host recovery references are rejected", async () => {
+  const agent = new Agent({ streamFn: scripted([done], []) });
+  const plugin = attachReflexes(agent, createReflexes({ judge: provider() }), { cwd: "/tmp", outputSource: (_c, text) => ({ kind: "captured", sourceId: "foreign", stream: "output", text, completeness: "complete", recovery: { sessionId: "another-session", sourceId: "foreign", instructions: "read_output" } }) });
+  await expect(agent.afterToolCall!({ toolCall: { id: "r", name: "read", arguments: {} }, args: {}, isError: false, result: { content: [{ type: "text", text: "secret" }], details: {} } } as never)).rejects.toThrow("foreign");
   plugin.dispose();
 });

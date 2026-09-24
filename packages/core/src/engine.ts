@@ -337,6 +337,7 @@ export function decideSteer(answers: Record<string, Answer>, policy: Policy): St
 }
 
 export interface ReflexIds {
+  revision?: number;
   sessionId: string;
   taskId?: string;
   turnId?: string;
@@ -411,7 +412,7 @@ export class ReflexEngine {
 
   private askOptions(options: AskOptions): AskOptions {
     const signals = [this.signal, options.signal].filter((s): s is AbortSignal => !!s);
-    return { deadlineMs: options.deadlineMs ?? this.policy.jev.deadlineMs, signal: signals.length ? AbortSignal.any(signals) : undefined };
+    return { context: options.context, deadlineMs: options.deadlineMs ?? this.policy.jev.deadlineMs, signal: signals.length ? AbortSignal.any(signals) : undefined };
   }
 
   private budgetReason(): string | null {
@@ -448,13 +449,14 @@ export class ReflexEngine {
     options: AskOptions = {},
   ): Promise<Judgment> {
     const judgmentId = this.makeId();
+    const contextIds = { ...this.ids(), ...options.context };
     const record = (
       status: ReflexStatus,
       result: AskResult | null,
       reason?: string,
       cacheProvenance?: { cachedFromJudgmentId: string },
     ): void => {
-      this.recordReflex(reflex, subject, state, questions, result, judgmentId, status, reason, cacheProvenance);
+      this.recordReflex(reflex, subject, state, questions, result, judgmentId, status, reason, cacheProvenance, contextIds);
     };
 
     const requestOptions = this.askOptions(options);
@@ -490,8 +492,10 @@ export class ReflexEngine {
     }
 
     const attempt = (async (): Promise<Judgment> => {
+      let obtained: AskResult | undefined;
       try {
         const result = await this.systemOne.ask(state, questions, requestOptions);
+        obtained = result;
         if (!groups) {
           const answers = validateAnswers(questions, result.answers);
           record("completed", result);
@@ -521,7 +525,7 @@ export class ReflexEngine {
         }
         const reason =
           error instanceof JevUnavailableError ? error.message : `judgment failed: ${error instanceof Error ? error.message : String(error)}`;
-        record("unavailable", null, reason);
+        record("unavailable", obtained ?? null, reason);
         return { status: "unavailable", reason, judgmentId };
       }
     })();
@@ -713,6 +717,7 @@ export class ReflexEngine {
       .sort((a, b) => b.count - a.count)[0];
     let decision = decidePulse(judgment.answers!, this.policy, { repeatedAction });
 
+    if (decision.action === "continue") this.lastPulseIntervention = undefined;
     if (decision.action === "intervene") {
       const fingerprint = hashAction({ reasons: decision.reasons, actionHashes: input.actionHashes ?? [] });
       if (fingerprint === this.lastPulseIntervention) {
@@ -750,6 +755,7 @@ export class ReflexEngine {
     const candidates = eligibleForSelection(input.catalog, input.available, input.baseline, input.explicit);
     if (candidates.length === 0) {
       const empty = createBitmap(input.catalog.catalogHash, input.catalog.entries.length);
+      this.recordDecision("select", { action: "ok", reasons: ["no optional candidates"] }, input.task.slice(0, 80));
       return { evaluated: empty, recommended: empty, scores: {}, reasons: {}, status: "ok", batches: 0 };
     }
 
@@ -897,12 +903,13 @@ export class ReflexEngine {
     status: ReflexStatus = "completed",
     reason?: string,
     cacheProvenance?: { cachedFromJudgmentId: string },
+    ids: ReflexIds = this.ids(),
   ): void {
-    const ids = this.ids();
     this.journal.append({
       t: "reflex",
       v: 2,
       sessionId: ids.sessionId,
+      ...(ids.revision !== undefined ? { revision: ids.revision } : {}),
       ...(ids.taskId !== undefined ? { taskId: ids.taskId } : {}),
       ...(ids.turnId !== undefined ? { turnId: ids.turnId } : {}),
       judgmentId,

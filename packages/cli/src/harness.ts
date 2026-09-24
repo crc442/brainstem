@@ -7,10 +7,8 @@ import {
   ARTIFACT_SCHEMA_VERSION,
   BoundedAnswerCache,
   boundForReview,
-  REVIEW_CHAR_CAP,
   contentHash,
   countLines,
-  splitIntoSections,
   toIds,
   hashAction,
   newId,
@@ -24,9 +22,7 @@ import {
   type ApprovalResolution,
   type ApprovalStatus,
   type ArtifactRecord,
-  type FocusDecision,
   type Journal,
-  type SectionManifest,
   type SystemOne,
   type ToolObservation,
   type ToolStatus,
@@ -42,7 +38,7 @@ import { changeSummaryForWrite } from "./change-summary";
 import { SessionRecorder } from "./session";
 import { makeTools } from "./tools";
 import { LocalArtifactStore } from "./output/artifact-store";
-import { FOCUS_PRESENT_BUDGET_CHARS, presentArtifact, type FocusRolloutMode } from "./output/present";
+import { presentArtifact, type FocusRolloutMode } from "./output/present";
 import { makeRecoveryTools } from "./output/recovery-tools";
 
 export const DEFAULT_SYSTEM_PROMPT = `You are a careful coding agent. Work inside the project directory. Prefer small, verifiable steps: run tests, read before writing, and keep the user informed. If a tool result says the harness blocked or flagged something, surface that to the user in your reply.`;
@@ -744,6 +740,12 @@ export function createHarness(options: HarnessOptions): Harness {
       const reviewed = await processOutput({
         capture: {
           kind: "captured", sourceId: artifact?.artifactId ?? toolCallId, stream: "output", text: fullText,
+          ...(artifact && details.stdoutText !== undefined && fullText === details.stdoutText + (details.stderrText ?? "") ? {
+            segments: [
+              { stream: "stdout", start: 0, end: Buffer.byteLength(details.stdoutText), sourceStart: 0 },
+              { stream: "stderr", start: Buffer.byteLength(details.stdoutText), end: Buffer.byteLength(fullText), sourceStart: 0 },
+            ],
+          } : {}),
           completeness: artifact ? (artifact.captureComplete ? "complete" : "limited") : "complete",
           ...(artifact ? { recovery: { sessionId: recorder.sessionId, sourceId: artifact.artifactId, instructions: "use read_output or search_output to recover the rest." } } : {}),
         },

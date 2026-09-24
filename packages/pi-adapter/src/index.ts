@@ -1,6 +1,6 @@
-import type { Agent, BeforeToolCallContext, AfterToolCallContext } from "@earendil-works/pi-agent-core";
+import type { Agent, AgentTool, AgentMessage, BeforeToolCallContext, AfterToolCallContext } from "@earendil-works/pi-agent-core";
 import {
-  createPluginSession, boundForReview,
+  createPluginSession, waitForHost, boundForReview,
   type Reflexes, type PluginSessionOptions, type CapabilityContext, type CapabilityRecommendation,
   type CapturedOutput, type MessageGateInput,
 } from "@brainstem/reflexes";
@@ -16,7 +16,8 @@ export interface AttachReflexesOptions extends PluginSessionOptions {
   onReflex?: (line: string) => void;
   /** The host supplies descriptions and loads approved schemas/skill instructions. */
   capabilities?: () => CapabilityContext;
-  applyCapabilities?: (recommendation: CapabilityRecommendation, signal: AbortSignal) => void | Promise<void>;
+  /** Load data first; the adapter applies it only while the message revision is current. */
+  loadCapabilities?: (recommendation: CapabilityRecommendation, signal: AbortSignal) => Promise<{ tools: AgentTool[]; skillInstructions?: string }>;
   actionEvidence?: (context: BeforeToolCallContext, signal: AbortSignal) => Promise<{ changeSummary?: string; evidenceIncomplete?: boolean }>;
   /** Metadata must describe the effective content after existing host hook transformations. */
   outputSource?: (context: AfterToolCallContext, text: string, signal: AbortSignal) => CapturedOutput | Promise<CapturedOutput>;
@@ -35,6 +36,7 @@ function textOf(content: readonly { type: string; text?: string }[]): string {
  * calls are not intercepted. The host owns execution and permissions.
  */
 export function attachReflexes(agent: Agent, reflexes: Reflexes, options: AttachReflexesOptions) {
+  if (options.pulseEveryTurns !== undefined && (!Number.isInteger(options.pulseEveryTurns) || options.pulseEveryTurns < 1)) throw new Error("pulseEveryTurns must be a positive integer");
   const session = createPluginSession(reflexes, { ...options, modes: {
     focus: options.focusMode === "on" ? "active" : "off", ...options.modes,
   } });
@@ -43,6 +45,7 @@ export function attachReflexes(agent: Agent, reflexes: Reflexes, options: Attach
   let disposed = false;
   let turns = 0;
   let appliedCatalog: string | undefined;
+  let skillMessage: AgentMessage | undefined;
   const report = (name: string, action: string, reasons: string[] = []) => options.onReflex?.(`[${name}] ${action}${reasons[0] ? ` — ${reasons[0]}` : ""}`);
 
   const originalBefore = agent.beforeToolCall;
@@ -56,7 +59,7 @@ export function attachReflexes(agent: Agent, reflexes: Reflexes, options: Attach
     let evidence: { changeSummary?: string; evidenceIncomplete?: boolean } = {};
     if (session.modes.gate !== "off" && options.actionEvidence) {
       // Give the callback an independent argument snapshot.
-      evidence = await options.actionEvidence({ ...context, args: structuredClone(snapshot) }, scope.signal);
+      evidence = await waitForHost(() => options.actionEvidence!({ ...context, args: structuredClone(snapshot) }, scope.signal), scope.signal);
     }
     const summary = evidence.changeSummary === undefined ? undefined : boundForReview(evidence.changeSummary, 8000);
     const reviewed = await session.reviewAction({
@@ -80,7 +83,7 @@ export function attachReflexes(agent: Agent, reflexes: Reflexes, options: Attach
     const text = textOf(content);
     const nonTextCount = content.filter((c) => c.type !== "text").length;
     if (!text.trim() && nonTextCount === 0) return originalResult;
-    const supplied = await options.outputSource?.(context, text, scope.signal);
+    const supplied = options.outputSource ? await waitForHost(() => Promise.resolve(options.outputSource!(context, text, scope.signal)), scope.signal) : undefined;
     if (supplied && supplied.text !== text) throw new Error("host output source does not describe the effective tool result");
     if (supplied?.recovery && supplied.recovery.sessionId !== session.sessionId) throw new Error("foreign output recovery reference");
     const details = context.result.details as { truncated?: boolean } | undefined;
@@ -91,7 +94,7 @@ export function attachReflexes(agent: Agent, reflexes: Reflexes, options: Attach
     const result = await reflexes.processOutput({
       capture, task: taskText(), action: `${context.toolCall.name} ${JSON.stringify(context.args)}`.slice(0, 300),
       status: (originalResult?.isError ?? context.isError) ? "error" : "ok", recent: options.recentActivity?.(),
-      focus: session.modes.focus, sanitize: session.modes.sanitize, verify: session.modes.verify, nonTextCount, signal: scope.signal,
+      focus: session.modes.focus, sanitize: session.modes.sanitize, verify: session.modes.verify, nonTextCount, signal: scope.signal, context: { taskId: scope.taskId, revision: scope.revision },
     });
     if (!scope.current()) throw new Error("stale output result");
     if (result.focusDecision) { report("focus", result.focusDecision.mode, result.focusDecision.reasons); session.applied("focus", session.modes.focus); }
@@ -131,13 +134,21 @@ export function attachReflexes(agent: Agent, reflexes: Reflexes, options: Attach
   agent.streamFunction = stream;
 
   async function prepareMessage(input: MessageGateInput & { taskId?: string }, signal?: AbortSignal) {
-    const prepared = await session.prepareMessage({ ...input, taskId: input.taskId ?? "conversation", capabilities: options.capabilities?.() }, signal);
+    const capabilities = options.capabilities?.();
+    const catalogIdentity = JSON.stringify(capabilities);
+    const prepared = await session.prepareMessage({ ...input, taskId: input.taskId ?? "conversation", capabilities }, signal);
+    if (!prepared.isCurrent()) throw new Error("message preparation stale");
     const scope = session.scope(signal);
-    if (prepared.allowed && prepared.recommendation && options.applyCapabilities) {
+    if (prepared.allowed && prepared.recommendation && options.loadCapabilities) {
       const key = JSON.stringify([prepared.recommendation.catalogHash, prepared.recommendation.ids]);
       if (key !== appliedCatalog) {
-        await options.applyCapabilities(prepared.recommendation, scope.signal);
+        const loaded = await waitForHost(() => options.loadCapabilities!(prepared.recommendation!, scope.signal), scope.signal);
         if (!scope.current()) throw new Error("capability application cancelled");
+        if (JSON.stringify(options.capabilities?.()) !== catalogIdentity) throw new Error("capability catalog changed during loading");
+        agent.state.tools = loaded.tools;
+        const messages = agent.state.messages.filter((m) => m !== skillMessage);
+        skillMessage = loaded.skillInstructions ? { role: "system", content: loaded.skillInstructions, timestamp: Date.now() } : undefined;
+        agent.state.messages = skillMessage ? [...messages, skillMessage] : messages;
         appliedCatalog = key;
       }
       session.applied("select", prepared.recommendation.ids.join(","));
