@@ -37,9 +37,9 @@ describe("genericJudge — parsing", () => {
     await expect(judge.ask({ task: "x" }, QUESTIONS)).rejects.toThrow(/destructiveness/);
   });
 
-  test("throws when a choice answer isn't one of the offered options", async () => {
-    const judge = genericJudge({ complete: async () => JSON.stringify({ is_safe: 0.9, destructiveness: 1, disposition: "maybe" }) });
-    await expect(judge.ask({ task: "x" }, QUESTIONS)).rejects.toThrow(/maybe/);
+  test.each(["maybe", "toString", "constructor"])("rejects choice %s when it is not an own offered option", async (choice) => {
+    const judge = genericJudge({ complete: async () => JSON.stringify({ is_safe: 0.9, destructiveness: 1, disposition: choice }) });
+    await expect(judge.ask({ task: "x" }, QUESTIONS)).rejects.toThrow(choice);
   });
 });
 

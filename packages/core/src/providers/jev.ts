@@ -110,6 +110,7 @@ export function jevSystemOne(client: TypeSafeClient, model = DEFAULT_JEV_MODEL):
 export function withCircuitBreaker(provider: SystemOne, breaker: CircuitBreaker): SystemOne {
   return {
     name: `breaker(${provider.name})`,
+    capabilities: provider.capabilities,
     async ask(state, questions, options) {
       if (!breaker.canRequest()) throw new JevUnavailableError("circuit open");
       try {

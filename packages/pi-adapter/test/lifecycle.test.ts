@@ -187,3 +187,13 @@ test("foreign host recovery references are rejected", async () => {
   await expect(agent.afterToolCall!({ toolCall: { id: "r", name: "read", arguments: {} }, args: {}, isError: false, result: { content: [{ type: "text", text: "secret" }], details: {} } } as never)).rejects.toThrow("foreign");
   plugin.dispose();
 });
+
+test("without a loader, Select supplies advice to the next model request", async () => {
+  const seen: { model: string; context: any }[] = [];
+  const agent = new Agent({ streamFn: scripted([done], seen), initialState: { tools: [] } });
+  const plugin = attachReflexes(agent, createReflexes({ judge: provider() }), { cwd: "/tmp", modes: { select: "active" }, capabilities: () => ({ catalog: [desc], available: ["browser"], baseline: [] }) });
+  await plugin.prompt("inspect browser");
+  expect(JSON.stringify(seen[0]?.context)).toContain("Suggested host-available capabilities: browser");
+  expect(agent.state.tools).toHaveLength(0);
+  plugin.dispose();
+});

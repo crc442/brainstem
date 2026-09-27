@@ -36,6 +36,7 @@ function textOf(content: readonly { type: string; text?: string }[]): string {
  * calls are not intercepted. The host owns execution and permissions.
  */
 export function attachReflexes(agent: Agent, reflexes: Reflexes, options: AttachReflexesOptions) {
+  if (options.modes?.select && options.modes.select !== "off" && !options.capabilities) throw new Error("Select requires a host capability catalog");
   if (options.pulseEveryTurns !== undefined && (!Number.isInteger(options.pulseEveryTurns) || options.pulseEveryTurns < 1)) throw new Error("pulseEveryTurns must be a positive integer");
   const session = createPluginSession(reflexes, { ...options, modes: {
     focus: options.focusMode === "on" ? "active" : "off", ...options.modes,
@@ -139,10 +140,12 @@ export function attachReflexes(agent: Agent, reflexes: Reflexes, options: Attach
     const prepared = await session.prepareMessage({ ...input, taskId: input.taskId ?? "conversation", capabilities }, signal);
     if (!prepared.isCurrent()) throw new Error("message preparation stale");
     const scope = session.scope(signal);
-    if (prepared.allowed && prepared.recommendation && options.loadCapabilities) {
+    if (prepared.allowed && prepared.recommendation) {
       const key = JSON.stringify([prepared.recommendation.catalogHash, prepared.recommendation.ids]);
       if (key !== appliedCatalog) {
-        const loaded = await waitForHost(() => options.loadCapabilities!(prepared.recommendation!, scope.signal), scope.signal);
+        const loaded = options.loadCapabilities
+          ? await waitForHost(() => options.loadCapabilities!(prepared.recommendation!, scope.signal), scope.signal)
+          : { tools: agent.state.tools, skillInstructions: `[brainstem] Suggested host-available capabilities: ${prepared.recommendation.ids.join(", ") || "no additions"}. Missing explicit capabilities: ${prepared.recommendation.missingExplicit.join(", ") || "none"}. Relevance does not grant permission to use them.` };
         if (!scope.current()) throw new Error("capability application cancelled");
         if (JSON.stringify(options.capabilities?.()) !== catalogIdentity) throw new Error("capability catalog changed during loading");
         agent.state.tools = loaded.tools;
@@ -151,7 +154,7 @@ export function attachReflexes(agent: Agent, reflexes: Reflexes, options: Attach
         agent.state.messages = skillMessage ? [...messages, skillMessage] : messages;
         appliedCatalog = key;
       }
-      session.applied("select", prepared.recommendation.ids.join(","));
+      session.applied("select", `${options.loadCapabilities ? "loaded" : "suggested"}: ${prepared.recommendation.ids.join(",")}`);
     }
     return prepared;
   }
