@@ -30,7 +30,7 @@
     "prepack": "../../node_modules/.bin/tsdown --config ../../tsdown.config.ts --filter reflexes"
   },
   "dependencies": {
-    "@brainstem/core": "^0.2.0",
+    "@brainstem/core": "workspace:^",
     "@typesafe-ai/sdk": "^0.6.0"
   }
 }

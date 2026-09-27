@@ -1,0 +1,38 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - run: npm install -g npm@latest
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+      - run: bun run test
+      - run: bun run build:check
+      # bun pm pack rewrites workspace: ranges to real versions; npm publish handles OIDC trusted publishing.
+      # Packages whose current version is already on npm are skipped, so a tag only publishes what was bumped.
+      - run: |
+          for pkg in core reflexes pi-adapter; do
+            name=$(jq -r .name "packages/$pkg/package.json")
+            version=$(jq -r .version "packages/$pkg/package.json")
+            if npm view "$name@$version" version >/dev/null 2>&1; then echo "skip $name@$version"; continue; fi
+            tarball=$(cd "packages/$pkg" && bun pm pack --destination ../../.cache/pack --quiet)
+            npm publish "$tarball" --access public
+          done
