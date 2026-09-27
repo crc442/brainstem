@@ -2,9 +2,9 @@
 
 Date: 2026-09-22
 
-Revised: 2026-09-23
+Revised: 2026-09-27
 
-Status: Planned; revised scope, no implementation included
+Status: Implemented for the public API, Pi adapter, and reference CLI; live product validation remains separate
 
 Brainstem supplies fast System One judgments to a main agent. It can recommend useful tools or skills, select relevant tool output, and judge whether a message or proposed action should proceed. The host applies those judgments and owns the agent loop, tool execution, permissions, approval UI, isolation, and whole-agent budgets.
 
@@ -34,7 +34,7 @@ An **aid** returns recommendations the host or main agent may use. A **gate** ru
 
 Pulse and Steer are supporting aids throughout the task, not extra executors. The host applies a Pulse intervention/stop or a Steer model recommendation under its own lifecycle, permissions, and budgets. Each reflex remains independently usable and configurable.
 
-## Current implementation and gaps
+## Baseline before implementation
 
 - Core already contains Select, Focus, Gate, Sanitize, Verify, Pulse, and Steer decisions. Existing mechanisms are reused where they fit; all seven remain part of the public integration plan. An adapter must explicitly declare any unsupported trigger or application point.
 - The public `createReflexes` facade exposes Gate, Focus, and observation (Sanitize/Verify). Select exists in core and the reference CLI but is not exposed through that facade or attached to incoming messages by the Pi adapter.
@@ -183,3 +183,20 @@ Record flow, trigger/subject revision, judgment, effective mode, host-applied ou
 With each implementation slice, run focused tests, then the repository test suite and typecheck as appropriate. Update API examples and README to show the three primary uses, all seven reflexes, declared host requirements, and limitations. Stage delivery without removing Pulse or Steer from the implementation or validation scope.
 
 Done means a host can consume all seven reflexes independently or together to aid or gate its main agent; supported adapters apply those results honestly at declared lifecycle boundaries; and the benchmark can measure their value and overhead without a new executor product.
+
+
+## Implementation record — 2026-09-27
+
+| Unit | Delivered evidence |
+|---|---|
+| A0 | Explicit Pi prompt/preparation wrapper; host ownership and supported hook boundaries documented; off/shadow/active modes; scoped cancellation and disposal |
+| A1 | Unavailable confidence/usage, provenance-aware policies/cache/replay, bounded judgment service and breaker, action snapshots, captured/presented/reviewed output contracts |
+| A2 | Public Select and per-message preparation; baseline/explicit/dependency handling; host loading or agent-facing suggestions; stale-load rejection |
+| A3 | Shared `processOutput` used by CLI and Pi; exact bounded review, Unicode/named-stream ranges, omission/coverage metadata, host-backed recovery |
+| A4 | Separate message/action inputs, source roles, incomplete-evidence escalation, host approval callback and argument-change invalidation |
+| A5 | Public Pulse/Steer; Pi progress checkpoint and actual model dispatch integration; host-owned stop/routing and conservative fallbacks |
+| A6 | Shared CLI/Pi lifecycle fixtures, adapter regression tests, metadata-only judgment and applied-outcome telemetry, integration guide and typechecked example |
+
+Validation: 478 tests across 43 files, repository typecheck, whitespace checks, and a network-free Bun public-API smoke check. The added integration contracts inspect actual model requests and tool execution. Existing host-specific symlink, approval, descendant-process, recovery-page, and multi-session regressions remain in the suite.
+
+See [the integration guide](../integration/plugin.md) for exact defaults and limitations. Incoming messages must use the wrapper or host preparation API; queued/direct dispatch is not automatically intercepted. Recovery storage, whole-agent budgets, and executor isolation remain host services. No live provider benchmark or product-value claim is included in this implementation.
