@@ -27,10 +27,7 @@ const NO_USAGE = {
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 };
 
-function assistantMessage(
-  content: AssistantMessage["content"],
-  stopReason: AssistantMessage["stopReason"],
-): AssistantMessage {
+function assistantMessage(content: AssistantMessage["content"], stopReason: AssistantMessage["stopReason"]): AssistantMessage {
   return {
     role: "assistant",
     content,
@@ -325,14 +322,23 @@ describe("reference CLI write approvals", () => {
     const harness = createHarness({
       systemOne: askUserSystemOne(),
       streamFn: scriptedStream([WRITE_CALL("tc1", "file.txt", "replacement"), DONE]),
-      model: undefined as never, trust: 0.3, journalPath: join(dir, "journal.ndjson"), cwd: dir,
-      approvalHandler: async (req) => { request = req; return resolution; },
+      model: undefined as never,
+      trust: 0.3,
+      journalPath: join(dir, "journal.ndjson"),
+      cwd: dir,
+      approvalHandler: async (req) => {
+        request = req;
+        return resolution;
+      },
     });
     await harness.prompt("Update file.txt");
     expect(request?.changeSummary).toContain("-original");
     expect(request?.changeSummary).toContain("+replacement");
     expect(readFileSync(target, "utf8")).toBe(resolution === "approve_once" ? "replacement" : "original");
-    expect(approvalEvents(eventsOf(harness.journalPath)).map((e) => e.status)).toEqual(["requested", resolution === "approve_once" ? "approved" : "denied"]);
+    expect(approvalEvents(eventsOf(harness.journalPath)).map((e) => e.status)).toEqual([
+      "requested",
+      resolution === "approve_once" ? "approved" : "denied",
+    ]);
   });
 
   test("an edit while approval is pending invalidates the proposed write", async () => {
@@ -340,9 +346,16 @@ describe("reference CLI write approvals", () => {
     const target = join(dir, "file.txt");
     writeFileSync(target, "original");
     const harness = createHarness({
-      systemOne: askUserSystemOne(), streamFn: scriptedStream([WRITE_CALL("tc1", "file.txt", "replacement"), DONE]),
-      model: undefined as never, trust: 0.3, journalPath: join(dir, "journal.ndjson"), cwd: dir,
-      approvalHandler: async () => { writeFileSync(target, "editor change"); return "approve_once"; },
+      systemOne: askUserSystemOne(),
+      streamFn: scriptedStream([WRITE_CALL("tc1", "file.txt", "replacement"), DONE]),
+      model: undefined as never,
+      trust: 0.3,
+      journalPath: join(dir, "journal.ndjson"),
+      cwd: dir,
+      approvalHandler: async () => {
+        writeFileSync(target, "editor change");
+        return "approve_once";
+      },
     });
     await harness.prompt("Update file.txt");
     expect(readFileSync(target, "utf8")).toBe("editor change");
@@ -352,8 +365,12 @@ describe("reference CLI write approvals", () => {
   test("mutating the approval request snapshot cannot change the executed bytes", async () => {
     dir = mkdtempSync(join(tmpdir(), "brainstem-write-approval-"));
     const harness = createHarness({
-      systemOne: askUserSystemOne(), streamFn: scriptedStream([WRITE_CALL("tc1", "file.txt", "reviewed"), DONE]),
-      model: undefined as never, trust: 0.3, journalPath: join(dir, "journal.ndjson"), cwd: dir,
+      systemOne: askUserSystemOne(),
+      streamFn: scriptedStream([WRITE_CALL("tc1", "file.txt", "reviewed"), DONE]),
+      model: undefined as never,
+      trust: 0.3,
+      journalPath: join(dir, "journal.ndjson"),
+      cwd: dir,
       approvalHandler: async (req) => {
         (req.validatedArgs as { content: string }).content = "changed by handler";
         return "approve_once";
@@ -371,9 +388,16 @@ describe("reference CLI write approvals", () => {
     writeFileSync(target, "original");
     let request: ApprovalRequest | undefined;
     const harness = createHarness({
-      systemOne: askUserSystemOne(), streamFn: scriptedStream([WRITE_CALL("tc1", "../outside.txt", "approved"), DONE]),
-      model: undefined as never, trust: 0.3, journalPath: join(dir, "journal.ndjson"), cwd: root,
-      approvalHandler: async (req) => { request = req; return "approve_once"; },
+      systemOne: askUserSystemOne(),
+      streamFn: scriptedStream([WRITE_CALL("tc1", "../outside.txt", "approved"), DONE]),
+      model: undefined as never,
+      trust: 0.3,
+      journalPath: join(dir, "journal.ndjson"),
+      cwd: root,
+      approvalHandler: async (req) => {
+        request = req;
+        return "approve_once";
+      },
     });
     await harness.prompt("Update outside.txt");
     expect(request?.target).toBe(target);

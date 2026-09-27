@@ -18,7 +18,16 @@ test("provider ignoring signals times out, opens breaker, and a cancelled probe 
   let now = 0;
   const breaker = new CircuitBreaker({ threshold: 1, cooldownMs: 10, probe: 1, now: () => now });
   let calls = 0;
-  const service = judgmentService({ name: "ignores-abort", ask: () => { calls++; return new Promise(() => {}); } }, { deadlineMs: 15, breaker });
+  const service = judgmentService(
+    {
+      name: "ignores-abort",
+      ask: () => {
+        calls++;
+        return new Promise(() => {});
+      },
+    },
+    { deadlineMs: 15, breaker },
+  );
   await expect(service.ask({}, {})).rejects.toThrow("deadline");
   await expect(service.ask({}, {})).rejects.toThrow("circuit open");
   expect(calls).toBe(1);
@@ -32,7 +41,11 @@ test("provider ignoring signals times out, opens breaker, and a cancelled probe 
 
 test("pre-abort and judgment limit prevent dispatch", async () => {
   const provider = mockSystemOne(() => ({}));
-  const service = judgmentService(provider, { deadlineMs: 100, maxCalls: 1, breaker: new CircuitBreaker({ threshold: 3, cooldownMs: 10, probe: 1 }) });
+  const service = judgmentService(provider, {
+    deadlineMs: 100,
+    maxCalls: 1,
+    breaker: new CircuitBreaker({ threshold: 3, cooldownMs: 10, probe: 1 }),
+  });
   await expect(service.ask({}, {}, { signal: AbortSignal.abort() })).rejects.toThrow("aborted");
   await service.ask({}, {});
   await expect(service.ask({}, {})).rejects.toThrow("limit");

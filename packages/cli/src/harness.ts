@@ -15,7 +15,10 @@ import {
   openJournal,
   policyForTrust,
   staticVerdict,
-  type ReflexModes, type ReflexName, type ReflexMode, type GateInput,
+  type ReflexModes,
+  type ReflexName,
+  type ReflexMode,
+  type GateInput,
   type AnswerCache,
   type ApprovalHandler,
   type ApprovalRequest,
@@ -140,9 +143,7 @@ function actionIdentity(tool: string, args: unknown, extra: { target?: string; p
     v: ACTION_HASH_SCHEMA_VERSION,
     tool,
     ...(argsSummaryFor(args) as object),
-    ...(typeof content === "string"
-      ? { contentDigest: contentHash(content), contentLength: Buffer.byteLength(content, "utf8") }
-      : {}),
+    ...(typeof content === "string" ? { contentDigest: contentHash(content), contentLength: Buffer.byteLength(content, "utf8") } : {}),
     ...(extra.target !== undefined ? { target: extra.target } : {}),
     ...(extra.preconditionDigest !== undefined ? { preconditionDigest: extra.preconditionDigest } : {}),
   };
@@ -288,12 +289,7 @@ export function createHarness(options: HarnessOptions): Harness {
     return lines;
   }
 
-  function emitObservation(
-    obs: ToolObservation,
-    deliveredExcerpt: string,
-    deliveredTruncated: boolean,
-    deliveredWhy?: string,
-  ): void {
+  function emitObservation(obs: ToolObservation, deliveredExcerpt: string, deliveredTruncated: boolean, deliveredWhy?: string): void {
     recorder.recordObservation(obs);
     journal.append({
       t: "tool_observation",
@@ -308,13 +304,7 @@ export function createHarness(options: HarnessOptions): Harness {
     });
   }
 
-  function emitBlockedObservation(
-    toolCallId: string,
-    tool: string,
-    args: unknown,
-    delivered: string,
-    why: string,
-  ): void {
+  function emitBlockedObservation(toolCallId: string, tool: string, args: unknown, delivered: string, why: string): void {
     recorder.recordAction(hashAction(actionIdentity(tool, args)), actionLabel(tool, args));
     emitObservation(
       {
@@ -356,9 +346,7 @@ export function createHarness(options: HarnessOptions): Harness {
     // never be reinterpreted as approving a different target or payload.
     const approvalId = newId("appr");
     const taskId = recorder.currentTask?.id ?? "";
-    const actionHash = hashAction(
-      actionIdentity(tool, args, { target: prepared.target, preconditionDigest: prepared.preconditionDigest }),
-    );
+    const actionHash = hashAction(actionIdentity(tool, args, { target: prepared.target, preconditionDigest: prepared.preconditionDigest }));
     const request: ApprovalRequest = {
       id: approvalId,
       taskId,
@@ -588,12 +576,19 @@ export function createHarness(options: HarnessOptions): Harness {
         const floor = staticVerdict("write", { path: prepared.target }, options.cwd);
         if (floor === "deny") return denyWrite("static floor denies this target");
         const change = changeSummaryForWrite(options.cwd, prepared.target, prepared.content);
-        const decision = floor === "ask"
-          ? { action: "ask", reasons: ["write outside project root requires approval"] }
-          : await judgeAction({
-              tool: "write", task: taskText(), path: prepared.target,
-              changeSummary: change.changeSummary, evidenceIncomplete: change.evidenceIncomplete,
-            }, signal);
+        const decision =
+          floor === "ask"
+            ? { action: "ask", reasons: ["write outside project root requires approval"] }
+            : await judgeAction(
+                {
+                  tool: "write",
+                  task: taskText(),
+                  path: prepared.target,
+                  changeSummary: change.changeSummary,
+                  evidenceIncomplete: change.evidenceIncomplete,
+                },
+                signal,
+              );
         options.onReflex?.(render("gate", decision.action, decision.reasons));
         if (decision.action === "deny") return denyWrite(decision.reasons.join("; "));
         if (decision.action === "ask") {
@@ -616,7 +611,8 @@ export function createHarness(options: HarnessOptions): Harness {
 
       if (toolCall.name === "bash") {
         const decision = await judgeAction({ tool: toolCall.name, task: taskText(), command: a.command ?? "" }, signal);
-        if (signal?.aborted || initialArguments !== JSON.stringify(args)) return { block: true, reason: "[brainstem] action changed or cancelled since review" };
+        if (signal?.aborted || initialArguments !== JSON.stringify(args))
+          return { block: true, reason: "[brainstem] action changed or cancelled since review" };
         options.onReflex?.(render("gate", decision.action, decision.reasons));
         if (decision.action === "deny") {
           const reason = `[brainstem] denied: ${decision.reasons.join("; ")}. Do not retry this command.`;
@@ -735,33 +731,56 @@ export function createHarness(options: HarnessOptions): Harness {
       // string, not two independently-phrased ones.
       const intent = `${toolCall.name} ${JSON.stringify(toolCall.arguments)}`;
 
-      const effectiveFocus = mode("focus", options.focusMode === "on" ? "active" : options.focusMode ?? "off");
+      const effectiveFocus = mode("focus", options.focusMode === "on" ? "active" : (options.focusMode ?? "off"));
       const focusRollout: FocusRolloutMode = effectiveFocus === "active" ? "on" : effectiveFocus;
-      const reviewed = await processOutput({
-        capture: {
-          kind: "captured", sourceId: artifact?.artifactId ?? toolCallId, stream: "output", text: fullText,
-          ...(artifact && details.stdoutText !== undefined && fullText === details.stdoutText + (details.stderrText ?? "") ? {
-            segments: [
-              { stream: "stdout", start: 0, end: Buffer.byteLength(details.stdoutText), sourceStart: 0 },
-              { stream: "stderr", start: Buffer.byteLength(details.stdoutText), end: Buffer.byteLength(fullText), sourceStart: 0 },
-            ],
-          } : {}),
-          completeness: artifact ? (artifact.captureComplete ? "complete" : "limited") : "complete",
-          ...(artifact ? { recovery: { sessionId: recorder.sessionId, sourceId: artifact.artifactId, instructions: "use read_output or search_output to recover the rest." } } : {}),
+      const reviewed = await processOutput(
+        {
+          capture: {
+            kind: "captured",
+            sourceId: artifact?.artifactId ?? toolCallId,
+            stream: "output",
+            text: fullText,
+            ...(artifact && details.stdoutText !== undefined && fullText === details.stdoutText + (details.stderrText ?? "")
+              ? {
+                  segments: [
+                    { stream: "stdout", start: 0, end: Buffer.byteLength(details.stdoutText), sourceStart: 0 },
+                    { stream: "stderr", start: Buffer.byteLength(details.stdoutText), end: Buffer.byteLength(fullText), sourceStart: 0 },
+                  ],
+                }
+              : {}),
+            completeness: artifact ? (artifact.captureComplete ? "complete" : "limited") : "complete",
+            ...(artifact
+              ? {
+                  recovery: {
+                    sessionId: recorder.sessionId,
+                    sourceId: artifact.artifactId,
+                    instructions: "use read_output or search_output to recover the rest.",
+                  },
+                }
+              : {}),
+          },
+          task: taskText(),
+          action: intent,
+          status: obs.status,
+          recent: recorder.recentActivity(5),
+          focus: artifact ? (focusRollout === "on" ? "active" : focusRollout) : "off",
+          nonTextCount,
+          signal: pluginSignal,
+          sanitize: mode("sanitize"),
+          verify: mode("verify"),
+          fallback: artifact ? (text) => presentArtifact(text, artifact.artifactId, { rollout: "off" }) : undefined,
         },
-        task: taskText(), action: intent, status: obs.status, recent: recorder.recentActivity(5),
-        focus: artifact ? (focusRollout === "on" ? "active" : focusRollout) : "off",
-        nonTextCount, signal: pluginSignal, sanitize: mode("sanitize"), verify: mode("verify"),
-        fallback: artifact ? (text) => presentArtifact(text, artifact.artifactId, { rollout: "off" }) : undefined,
-      }, {
-        focus: (input, opts) => timedJev(() => engine.focus(input, opts)),
-        observe: (input, opts) => timedJev(() => engine.observeToolResult(input, opts)),
-      });
+        {
+          focus: (input, opts) => timedJev(() => engine.focus(input, opts)),
+          observe: (input, opts) => timedJev(() => engine.observeToolResult(input, opts)),
+        },
+      );
       const manifest = reviewed.manifest;
       const focusDecision = reviewed.focusDecision;
       if (focusDecision) options.onReflex?.(render("focus", focusDecision.mode, focusDecision.reasons));
       if (reviewed.sanitize) options.onReflex?.(render("sanitize", reviewed.sanitize.action, reviewed.sanitize.reasons));
-      if (reviewed.verify && (reviewed.verify.action === "mismatch" || !reviewed.verify.verified)) options.onReflex?.(render("verify", reviewed.verify.verified ? reviewed.verify.action : "unavailable", reviewed.verify.reasons));
+      if (reviewed.verify && (reviewed.verify.action === "mismatch" || !reviewed.verify.verified))
+        options.onReflex?.(render("verify", reviewed.verify.verified ? reviewed.verify.action : "unavailable", reviewed.verify.reasons));
       let deliveredExcerpt = reviewed.text;
       const deliveredTruncated = reviewed.presented.omitted;
       const deliveredWhy = reviewed.why;
@@ -802,7 +821,12 @@ export function createHarness(options: HarnessOptions): Harness {
         // original error flag unless explicitly overridden, and content
         // review must never itself flip an ok result into an error or vice
         // versa.
-        return { content: [{ type: "text", text: deliveredExcerpt }, ...(mode("sanitize") !== "active" && mode("verify") !== "active" ? rawContent.filter((c) => c.type !== "text") : [])] } as never;
+        return {
+          content: [
+            { type: "text", text: deliveredExcerpt },
+            ...(mode("sanitize") !== "active" && mode("verify") !== "active" ? rawContent.filter((c) => c.type !== "text") : []),
+          ],
+        } as never;
       }
       return undefined;
     },
@@ -868,12 +892,19 @@ export function createHarness(options: HarnessOptions): Harness {
       recorder.beginTurn();
       try {
         if (mode("messageGate", "off") !== "off") {
-          const decision = await timedJev(() => engine.messageGate({ message: text, task: taskText(), constraints: options.messageConstraints ?? [] }, { signal: pluginSignal }));
+          const decision = await timedJev(() =>
+            engine.messageGate(
+              { message: text, task: taskText(), constraints: options.messageConstraints ?? [] },
+              { signal: pluginSignal },
+            ),
+          );
           options.onReflex?.(render("message_gate", decision.action, decision.reasons));
           if (mode("messageGate", "off") === "active") {
             if (decision.action === "deny") throw new Error(`[brainstem] message denied: ${decision.reasons.join("; ")}`);
             if (decision.action === "ask") {
-              const blocked = await runApproval(newId("message"), "message", { message: text }, decision.reasons, pluginSignal, { changeSummary: boundForReview(text).text });
+              const blocked = await runApproval(newId("message"), "message", { message: text }, decision.reasons, pluginSignal, {
+                changeSummary: boundForReview(text).text,
+              });
               if (blocked) throw new Error(blocked.reason);
             }
           }
