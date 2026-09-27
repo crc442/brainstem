@@ -64,9 +64,9 @@ function globToRegex(pattern: string): RegExp {
 
 export function makeTools(deps: ToolDeps): AgentTool[] {
   const bashParams = Type.Object({
-      command: Type.String({ description: "The shell command to run" }),
-      timeout_ms: Type.Optional(Type.Number({ description: "Timeout in milliseconds (default 60000)" })),
-    });
+    command: Type.String({ description: "The shell command to run" }),
+    timeout_ms: Type.Optional(Type.Number({ description: "Timeout in milliseconds (default 60000)" })),
+  });
 
   interface StreamCollection {
     text: string;
@@ -281,7 +281,14 @@ export function makeTools(deps: ToolDeps): AgentTool[] {
         };
       }
 
-      const status = killedBy === "cancelled" ? ("cancelled" as const) : killedBy === "timeout" ? ("timeout" as const) : code === 0 ? ("ok" as const) : ("error" as const);
+      const status =
+        killedBy === "cancelled"
+          ? ("cancelled" as const)
+          : killedBy === "timeout"
+            ? ("timeout" as const)
+            : code === 0
+              ? ("ok" as const)
+              : ("error" as const);
       // Distinct from R1's presentation truncation: this is the CAPTURE
       // completeness contract — true only when both streams closed on their
       // own within their retention cap, never display-clipped afterward.
@@ -313,8 +320,8 @@ export function makeTools(deps: ToolDeps): AgentTool[] {
   };
 
   const readParams = Type.Object({
-      path: Type.String({ description: "File path, relative to the project directory" }),
-    });
+    path: Type.String({ description: "File path, relative to the project directory" }),
+  });
   const read: AgentTool<typeof readParams> = {
     name: "read",
     label: "Read File",
@@ -337,13 +344,14 @@ export function makeTools(deps: ToolDeps): AgentTool[] {
   };
 
   const writeParams = Type.Object({
-      path: Type.String({ description: "File path, relative to the project directory" }),
-      content: Type.String({ description: "Full file content to write" }),
-    });
+    path: Type.String({ description: "File path, relative to the project directory" }),
+    content: Type.String({ description: "Full file content to write" }),
+  });
   const write: AgentTool<typeof writeParams> = {
     name: "write",
     label: "Write File",
-    description: "Create or replace a local file. The reference CLI checks approval and stale contents; this tool is not a filesystem sandbox.",
+    description:
+      "Create or replace a local file. The reference CLI checks approval and stale contents; this tool is not a filesystem sandbox.",
     parameters: writeParams,
     execute: async (id, params, signal) => {
       const approved = deps.approvedWrites?.get(id);
@@ -373,9 +381,9 @@ export function makeTools(deps: ToolDeps): AgentTool[] {
   }
 
   const grepParams = Type.Object({
-      pattern: Type.String({ description: "Regular expression to search for" }),
-      path: Type.Optional(Type.String({ description: "Directory to search (default: project root)" })),
-    });
+    pattern: Type.String({ description: "Regular expression to search for" }),
+    path: Type.Optional(Type.String({ description: "Directory to search (default: project root)" })),
+  });
   const grep: AgentTool<typeof grepParams> = {
     name: "grep",
     label: "Grep",
@@ -415,8 +423,8 @@ export function makeTools(deps: ToolDeps): AgentTool[] {
   };
 
   const globParams = Type.Object({
-      pattern: Type.String({ description: "Glob pattern, e.g. src/**/*.ts" }),
-    });
+    pattern: Type.String({ description: "Glob pattern, e.g. src/**/*.ts" }),
+  });
   const glob: AgentTool<typeof globParams> = {
     name: "glob",
     label: "Glob",

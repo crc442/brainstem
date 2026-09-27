@@ -15,7 +15,9 @@ function describeQuestion(id: string, q: Question): string {
     const levels = q.criteria.map((c, i) => `${i}=${c}`).join("; ");
     return `- "${id}" (score, 0 to ${q.criteria.length - 1}): ${q.instructions}\n  Levels: ${levels}`;
   }
-  const choices = Object.entries(q.criteria).map(([k, v]) => `"${k}"=${v}`).join("; ");
+  const choices = Object.entries(q.criteria)
+    .map(([k, v]) => `"${k}"=${v}`)
+    .join("; ");
   return `- "${id}" (choice): ${q.instructions}\n  Options: ${choices}`;
 }
 
@@ -56,7 +58,8 @@ function toAnswer(id: string, q: Question, raw: unknown): Answer {
   }
   if (typeof raw !== "string") throw new Error(`question "${id}": expected a string`);
   const choice = raw;
-  if (!Object.hasOwn(q.criteria, choice)) throw new Error(`question "${id}": "${choice}" is not one of ${Object.keys(q.criteria).join(", ")}`);
+  if (!Object.hasOwn(q.criteria, choice))
+    throw new Error(`question "${id}": "${choice}" is not one of ${Object.keys(q.criteria).join(", ")}`);
   return { type: "choice", choice, probabilities: null, confidence: null, confidenceSource: "unavailable" };
 }
 
@@ -82,7 +85,9 @@ export function genericJudge(options: GenericJudgeOptions): SystemOne {
       try {
         raw = extractJson(text);
       } catch (error) {
-        throw new JevUnavailableError(`genericJudge: could not parse a JSON response (${error instanceof Error ? error.message : String(error)})`);
+        throw new JevUnavailableError(
+          `genericJudge: could not parse a JSON response (${error instanceof Error ? error.message : String(error)})`,
+        );
       }
 
       const answers: Record<string, Answer> = {};

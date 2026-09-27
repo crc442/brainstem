@@ -213,10 +213,7 @@ describe("R4: managed process group termination", () => {
     if (!hasPython3) return; // environment without python3: nothing to detach with, skip rather than false-fail
 
     dir = mkdtempSync(join(tmpdir(), "brainstem-tools-r4-"));
-    writeFileSync(
-      join(dir, "detach.py"),
-      "import os,time\nos.setsid()\ntime.sleep(1.0)\n",
-    );
+    writeFileSync(join(dir, "detach.py"), "import os,time\nos.setsid()\ntime.sleep(1.0)\n");
     const bash = makeTools({ cwd: dir, killGraceMs: 50, drainGraceMs: 20 }).find((t) => t.name === "bash")!;
     const started = performance.now();
     const result = (await bash.execute("drain", { command: "python3 detach.py & wait", timeout_ms: 200 })) as {
@@ -247,7 +244,10 @@ describe("reference CLI write action binding", () => {
     const write = makeTools({ cwd: dir, approvedWrites }).find((t) => t.name === "write")!;
     const args = { path: "file.txt", content: "approved" };
     await expect(write.execute("missing", args)).rejects.toThrow(/no approved action/);
-    for (const mutation of [{ ...args, content: "changed" }, { ...args, path: "other.txt" }]) {
+    for (const mutation of [
+      { ...args, content: "changed" },
+      { ...args, path: "other.txt" },
+    ]) {
       approvedWrites.set("changed", prepareDemoWrite(dir, args.path, args.content));
       await expect(write.execute("changed", mutation)).rejects.toThrow(/arguments changed/);
       expect(approvedWrites.has("changed")).toBe(false);

@@ -10,17 +10,11 @@
     "skipLibCheck": true,
     "noEmit": true,
     "verbatimModuleSyntax": true,
-    "baseUrl": ".",
     "paths": {
-      "@brainstem/core": [
-        "./packages/core/src/index.ts"
-      ],
-      "@brainstem/reflexes": [
-        "./packages/reflexes/src/index.ts"
-      ],
-      "@brainstem/pi-adapter": [
-        "./packages/pi-adapter/src/index.ts"
-      ]
+      "@brainstem/core": ["./packages/core/src/index.ts"],
+      "@brainstem/reflexes": ["./packages/reflexes/src/index.ts"],
+      "@brainstem/reflexes/*": ["./packages/reflexes/src/*"],
+      "@brainstem/pi-adapter": ["./packages/pi-adapter/src/index.ts"]
     }
   },
   "include": [

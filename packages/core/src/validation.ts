@@ -25,13 +25,23 @@ function validateProbabilities(id: string, probabilities: unknown): void {
   }
 }
 
-function confidenceFields(id: string, a: Record<string, unknown>): Pick<ChoiceAnswer, "confidence" | "confidenceSource" | "calibrationProfile"> {
+function confidenceFields(
+  id: string,
+  a: Record<string, unknown>,
+): Pick<ChoiceAnswer, "confidence" | "confidenceSource" | "calibrationProfile"> {
   if (a.confidence === null && a.confidenceSource === "unavailable") return { confidence: null, confidenceSource: "unavailable" };
-  if (!finite(a.confidence) || !inUnitRange(a.confidence)) fail(`answer "${id}": confidence must be a finite number in [0,1] or explicitly unavailable`);
+  if (!finite(a.confidence) || !inUnitRange(a.confidence))
+    fail(`answer "${id}": confidence must be a finite number in [0,1] or explicitly unavailable`);
   const source = a.confidenceSource ?? "legacy";
-  if (!["provider-reported", "self-reported", "calibrated", "legacy"].includes(String(source))) fail(`answer "${id}": invalid confidence provenance`);
-  if (source === "calibrated" && (typeof a.calibrationProfile !== "string" || !a.calibrationProfile)) fail(`answer "${id}": calibration profile required`);
-  return { confidence: a.confidence, confidenceSource: source as ChoiceAnswer["confidenceSource"], ...(source === "calibrated" ? { calibrationProfile: a.calibrationProfile as string } : {}) };
+  if (!["provider-reported", "self-reported", "calibrated", "legacy"].includes(String(source)))
+    fail(`answer "${id}": invalid confidence provenance`);
+  if (source === "calibrated" && (typeof a.calibrationProfile !== "string" || !a.calibrationProfile))
+    fail(`answer "${id}": calibration profile required`);
+  return {
+    confidence: a.confidence,
+    confidenceSource: source as ChoiceAnswer["confidenceSource"],
+    ...(source === "calibrated" ? { calibrationProfile: a.calibrationProfile as string } : {}),
+  };
 }
 
 function validateAnswer(id: string, question: Question, answer: unknown): Answer {
@@ -76,10 +86,7 @@ function validateAnswer(id: string, question: Question, answer: unknown): Answer
   return chosen;
 }
 
-export function validateAnswers(
-  questions: Record<string, Question>,
-  rawAnswers: Record<string, unknown>,
-): Record<string, Answer> {
+export function validateAnswers(questions: Record<string, Question>, rawAnswers: Record<string, unknown>): Record<string, Answer> {
   const answers: Record<string, Answer> = {};
   for (const id of Object.keys(questions)) {
     answers[id] = validateAnswer(id, questions[id]!, rawAnswers[id]);

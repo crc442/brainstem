@@ -5,9 +5,9 @@ import { attachReflexes, type AttachReflexesOptions } from "../src";
 /** The host supplies execution, permissions, capability loading and optional recovery. */
 export function installBrainstem(
   agent: Agent,
-  host: Pick<AttachReflexesOptions,
-    "cwd" | "capabilities" | "loadCapabilities" | "actionEvidence" |
-    "approve" | "outputSource" | "miniModel" | "recentActivity"
+  host: Pick<
+    AttachReflexesOptions,
+    "cwd" | "capabilities" | "loadCapabilities" | "actionEvidence" | "approve" | "outputSource" | "miniModel" | "recentActivity"
   > & {
     judge: SystemOne;
     onJudgment?: (event: JudgmentEvent) => void;

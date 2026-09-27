@@ -3,8 +3,12 @@ import { JevCancelledError, JevUnavailableError } from "./errors";
 import type { SystemOne } from "./types";
 
 /** Bounds local waiting, not remote compute or host execution. One instance per provider/session. */
-export function judgmentService(provider: SystemOne, options: { deadlineMs: number; maxCalls?: number; breaker: CircuitBreaker }): SystemOne {
-  if (options.maxCalls !== undefined && (!Number.isInteger(options.maxCalls) || options.maxCalls < 0)) throw new Error("maxJudgmentCalls must be a non-negative integer");
+export function judgmentService(
+  provider: SystemOne,
+  options: { deadlineMs: number; maxCalls?: number; breaker: CircuitBreaker },
+): SystemOne {
+  if (options.maxCalls !== undefined && (!Number.isInteger(options.maxCalls) || options.maxCalls < 0))
+    throw new Error("maxJudgmentCalls must be a non-negative integer");
   if (!Number.isFinite(options.deadlineMs) || options.deadlineMs <= 0) throw new Error("judgment deadline must be positive");
   let calls = 0;
   return {
@@ -22,9 +26,15 @@ export function judgmentService(provider: SystemOne, options: { deadlineMs: numb
       let onAbort: () => void = () => {};
       try {
         const cancelled = new Promise<never>((_, reject) => {
-          onAbort = () => { reject(new JevCancelledError("judgment aborted")); controller.abort(); };
+          onAbort = () => {
+            reject(new JevCancelledError("judgment aborted"));
+            controller.abort();
+          };
           request.signal?.addEventListener("abort", onAbort, { once: true });
-          timer = setTimeout(() => { reject(new JevUnavailableError("judgment deadline exceeded")); controller.abort(); }, deadlineMs);
+          timer = setTimeout(() => {
+            reject(new JevUnavailableError("judgment deadline exceeded"));
+            controller.abort();
+          }, deadlineMs);
         });
         const result = await Promise.race([cancelled, provider.ask(state, questions, { signal: controller.signal, deadlineMs })]);
         if (request.signal?.aborted) throw new JevCancelledError("judgment aborted");
