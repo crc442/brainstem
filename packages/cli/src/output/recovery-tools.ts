@@ -344,8 +344,7 @@ export function makeRecoveryTools(deps: RecoveryToolDeps): AgentTool[] {
       const startLine = clampInt(params.startLine, 1, Math.max(1, allLines.length));
       // Every resume is a whole-line boundary — scanFrom's own line 1 is
       // ALWAYS the complete, original text of `startLine`, never a fragment
-      // of it. searchContent itself guarantees it never stops mid-line (see
-      // R6 in docs/plans/2026-09-22-review-remediation.md), so there is
+      // of it. searchContent itself guarantees it never stops mid-line, so there is
       // nothing here to reconstruct a partial line from.
       const scanFrom = allLines.slice(startLine - 1).join("\n");
       const complete = entry.meta.streams[stream]?.complete ?? entry.meta.captureComplete;

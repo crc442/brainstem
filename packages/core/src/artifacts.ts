@@ -90,8 +90,7 @@ export const DEFAULT_MAX_SCAN_CHARS = 1_000_000;
 
 // A regex must only ever be evaluated against a COMPLETE original line —
 // never a character-offset fragment of one, which silently breaks anchors
-// (^/$), lookaround, and any pattern that spans the cut point (see R6 in
-// docs/plans/2026-09-22-review-remediation.md). maxScanChars bounds how many
+// (^/$), lookaround, and any pattern that spans the cut point. maxScanChars bounds how many
 // separate lines a single call is willing to start scanning, but the line
 // already "in progress" when that budget is reached is always still
 // evaluated to its own true end — bounded instead by this much higher

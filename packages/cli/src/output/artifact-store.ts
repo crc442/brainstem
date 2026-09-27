@@ -28,8 +28,7 @@ interface SessionManifest {
 }
 
 /**
- * File-per-artifact store rooted at a session-scoped directory (see R7:
- * docs/plans/2026-09-22-review-remediation.md). Every write goes through a
+ * File-per-artifact store rooted at a session-scoped directory. Every write goes through a
  * temp file + rename so a crash mid-put can never leave a torn capture:
  * readers see either the previous state or the complete new file.
  *

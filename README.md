@@ -105,9 +105,7 @@ hostile processes modifying its filesystem. Its `bash` tool also runs with the
 host user's permissions. Use the host's sandbox or other isolation when needed.
 
 Plugin consumers keep their own executor, permission system, and concurrency
-policy. Attaching Brainstem does not replace those systems. The earlier
-[transactional backend proposal](docs/plans/2026-09-23-managed-write-backend.md)
-is deferred as a separate execution-product idea, not plugin release work.
+policy. Attaching Brainstem does not replace those systems. A transactional write backend is deferred as a separate execution-product idea, not plugin release work.
 
 ## Managed process termination
 
@@ -239,7 +237,7 @@ Re-scores recorded judgments offline against a different policy, resolved strict
 
 ## Answer cache
 
-Every reflex — gate, sanitize, verify, pulse, steer, select, focus — shares one bounded, in-memory exact-answer cache by default (no configuration needed; pass `answerCache` to `createHarness` to override or disable). A judgment is cached only on success and is checked *before* any budget gate, since reuse costs zero new provider calls; on a hit, the cached answers are re-validated against the current question table before use, and a stale/incompatible entry silently falls through to a fresh call rather than surfacing as a new failure. Concurrent identical requests are deduplicated into one in-flight call. Journal `reflex` events record `cacheHit`/`cachedFromJudgmentId` so a cache hit's provenance stays distinguishable from a fresh one. See `docs/tasks/p10.md` for what's covered and what's deliberately deferred (gate batching, pulse/steer/select fusion, a buffered journal sink, gate prefetch, journal seeding).
+Every reflex — gate, sanitize, verify, pulse, steer, select, focus — shares one bounded, in-memory exact-answer cache by default (no configuration needed; pass `answerCache` to `createHarness` to override or disable). A judgment is cached only on success and is checked *before* any budget gate, since reuse costs zero new provider calls; on a hit, the cached answers are re-validated against the current question table before use, and a stale/incompatible entry silently falls through to a fresh call rather than surfacing as a new failure. Concurrent identical requests are deduplicated into one in-flight call. Journal `reflex` events record `cacheHit`/`cachedFromJudgmentId` so a cache hit's provenance stays distinguishable from a fresh one. Deliberately deferred: gate batching, pulse/steer/select fusion, a buffered journal sink, gate prefetch, journal seeding.
 
 ## Versions
 
