@@ -1,5 +1,7 @@
 # Live configuration pilot
 
+The [2026-09-27 pilot report](report-2026-09-27.md) records all 16 runs, costs, counterexamples and the Pulse fix it prompted.
+
 ```sh
 bun run eval:paired:live:dry-run
 bun run eval:paired:live /tmp/brainstem-live-pilot-v1
@@ -18,7 +20,7 @@ All arms have the same tools, constraints, output ceiling, recovery service and 
 
 The run directory contains the frozen prompt, fixtures, source hashes, protocol and counterbalanced job order. A durable claim reserves each run before dispatch. Each network request writes a reservation to its call ledger before sending it, then appends its response status and usage. No automatic retries or selective reruns. A provider error stops the remaining matrix; those jobs stay missing. Claimed/interrupted jobs aren't repeated on resume. Don't remove a stale lock until the runner and its worker have exited. A new study needs a new directory and must still fit the authorized aggregate budget.
 
-Reports retain failure statuses and all-attempt cost/latency. Missing cache counts make exact cost unknown; the uncached upper estimate is reported separately. Failed requests retain their reservation. Provider usage times published rates is an estimate, not an invoice. Pi's numeric cost fields in message transcripts are placeholders; use the transport ledger for accounting.
+Reports retain failure statuses and all-attempt cost/latency. Missing main-model cache counts make exact cost unknown; the uncached upper estimate is reported separately. Jev doesn't report provider-cache usage, but its single input rate still permits cost accounting. Failed requests retain their reservation. Provider usage times published rates is an estimate, not an invoice. Pi's numeric cost fields in message transcripts are placeholders; use the transport ledger for accounting.
 
 Interpret this as development evidence. Four tasks can't establish completion noninferiority, gate safety or p95 latency. Individual reflex ablations, code-edit tasks, independent label review, held-out sampling and broader host/model replication remain.
 

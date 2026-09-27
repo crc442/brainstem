@@ -2,6 +2,8 @@
 
 For the new seven-reflex paired protocol, start with the [offline validation runner](paired/README.md). Its dry run and scripted fixtures make no provider calls. The older live pilots below remain development evidence.
 
+The [live paired configuration pilot](paired/live/report-2026-09-27.md) completed 16 runs on 2026-09-27. It includes fixed-mini controls, all-attempt costs, a Pulse lifecycle regression and a benign-quotation counterexample for Sanitize.
+
 ```sh
 bun run eval:live
 ```
