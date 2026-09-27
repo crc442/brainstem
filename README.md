@@ -1,4 +1,4 @@
-# brainstem
+<p align="center"><img src="assets/wordmark.png" alt="brainstem" width="420"></p>
 
 A plugin layer that adds bounded System One judgments to a coding agent: assess proposed actions, review tool output, and guide the host agent's next step. Jev (TypeSafe's System One model) supplies judgments; the host agent owns execution.
 
@@ -244,3 +244,9 @@ Every reflex — gate, sanitize, verify, pulse, steer, select, focus — shares 
 ## Versions
 
 The `@earendil-works/pi-*` dependencies (0.86.1) are pinned deliberately; upgrades are explicit checks.
+
+## Packages and builds
+
+The public core, reflexes, and Pi adapter packages build ESM and type declarations with `bun run build`. Published exports point to `dist`; repository tests and development scripts resolve current workspace sources. See each package README for installation.
+
+MIT licensed; see [LICENSE](LICENSE).

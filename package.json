@@ -1,7 +1,9 @@
 {
   "name": "brainstem",
   "private": true,
-  "workspaces": ["packages/*"],
+  "workspaces": [
+    "packages/*"
+  ],
   "scripts": {
     "exp:access": "bun run experiments/01-access.ts",
     "exp:gate": "bun run experiments/02-gate-corpus.ts",
@@ -15,7 +17,8 @@
     "eval:with-without": "bun run experiments/evals/with-without-harness.ts",
     "eval:focus-vs-rtk": "bun run experiments/evals/focus-vs-rtk.ts",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit -p tsconfig.json"
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "build": "bun run --cwd packages/core build && bun run --cwd packages/reflexes build && bun run --cwd packages/pi-adapter build"
   },
   "dependencies": {
     "@typesafe-ai/sdk": "^0.6.0"
@@ -23,7 +26,8 @@
   "devDependencies": {
     "bun-types": "^1.4.2",
     "typescript": "^5.9.0",
-    "vitest": "^3.2.0"
+    "vitest": "^3.2.0",
+    "tsup": "^8.5.1"
   },
   "trustedDependencies": [
     "@google/genai",

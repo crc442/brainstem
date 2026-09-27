@@ -1,8 +1,27 @@
 {
   "name": "@brainstem/pi-adapter",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
-  "exports": { ".": "./src/index.ts" },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/crc442/brainstem.git",
+    "directory": "packages/pi-adapter"
+  },
+  "files": [
+    "dist"
+  ],
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsup"
+  },
   "dependencies": {
     "@brainstem/reflexes": "workspace:*"
   },
@@ -12,6 +31,7 @@
   "devDependencies": {
     "@brainstem/core": "workspace:*",
     "@earendil-works/pi-agent-core": "0.86.1",
-    "@earendil-works/pi-ai": "0.86.1"
+    "@earendil-works/pi-ai": "0.86.1",
+    "tsup": "^8.5.1"
   }
 }

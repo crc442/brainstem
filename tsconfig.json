@@ -3,12 +3,33 @@
     "target": "ES2022",
     "module": "ESNext",
     "moduleResolution": "bundler",
-    "types": ["bun-types"],
+    "types": [
+      "bun-types"
+    ],
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "skipLibCheck": true,
     "noEmit": true,
-    "verbatimModuleSyntax": true
+    "verbatimModuleSyntax": true,
+    "baseUrl": ".",
+    "paths": {
+      "@brainstem/core": [
+        "./packages/core/src/index.ts"
+      ],
+      "@brainstem/reflexes": [
+        "./packages/reflexes/src/index.ts"
+      ],
+      "@brainstem/pi-adapter": [
+        "./packages/pi-adapter/src/index.ts"
+      ]
+    }
   },
-  "include": ["experiments", "packages/*/src", "packages/*/test", "packages/*/examples", "vitest.config.ts"]
+  "include": [
+    "experiments",
+    "packages/*/src",
+    "packages/*/test",
+    "packages/*/examples",
+    "vitest.config.ts",
+    "packages/*/tsup.config.ts"
+  ]
 }
