@@ -1,6 +1,6 @@
 {
   "name": "@brainstem/reflexes",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "type": "module",
   "license": "MIT",
   "repository": {
@@ -27,7 +27,7 @@
     "build": "tsup"
   },
   "dependencies": {
-    "@brainstem/core": "workspace:*",
+    "@brainstem/core": "^0.2.0",
     "@typesafe-ai/sdk": "^0.6.0"
   },
   "devDependencies": {
