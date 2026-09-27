@@ -10,5 +10,5 @@
     "noEmit": true,
     "verbatimModuleSyntax": true
   },
-  "include": ["experiments", "packages/*/src", "packages/*/test", "vitest.config.ts"]
+  "include": ["experiments", "packages/*/src", "packages/*/test", "packages/*/examples", "vitest.config.ts"]
 }

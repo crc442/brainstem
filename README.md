@@ -8,13 +8,13 @@ A plugin layer that adds bounded System One judgments to a coding agent: assess 
 |---|---|
 | Host agent/runtime | Tool execution, filesystem permissions/isolation, approval UI, execution budgets |
 | Brainstem plugin | Judgment evidence, reflex policies, reviewed output, integration hooks |
-| Jev (System One) | Narrow semantic judgments over supplied evidence (gate/sanitize/verify/pulse/steer) |
+| Jev (System One) | Narrow semantic judgments for all seven reflexes |
 | Main model | Strategy, code, explanations |
 | User | Intent, constraints, approvals |
 
 
 `@brainstem/reflexes` exposes the judgment API. `@brainstem/pi-adapter` attaches
-it to tools owned by an existing Pi agent. `@brainstem/cli` is a runnable
+it to an existing Pi agent through message preparation, tool hooks, progress checkpoints, and model routing. `@brainstem/cli` is a runnable
 reference host demonstrating the integration; its local tools are not a sandbox
 or a transactional workspace product. A safe custom filesystem backend is not a
 prerequisite for using the plugin.
@@ -29,16 +29,30 @@ What each reflex is shown is as much a part of the contract as what it decides:
 
 | Reflex | Evidence it receives |
 |---|---|
-| Gate | The reference CLI supplies the command or a bounded write diff/new-file summary, flagged when incomplete. The lightweight Pi adapter currently supplies command/path; hosts needing content-aware write judgments must supply change evidence through the reflex API. |
+| Gate | The reference CLI supplies the command or a bounded write diff/new-file summary, flagged when incomplete. The Pi adapter snapshots arguments and accepts host-provided change evidence. Message Gate separately reviews incoming requests and source-labelled attachments before host dispatch. |
 | Sanitize / Verify | One bounded envelope: task, source, action summary, capped intent, status, truncation, and the exact content actually delivered — never a second independent slice of the raw capture. Reviewed regardless of `isError`: a thrown tool error's text gets the same review as any other output, not a bypass. The bound is one shared character cap (`packages/core/src/presentation.ts`, `REVIEW_CHAR_CAP` = 8,000 chars) applied once, before both Sanitize and delivery — a single very long line cannot exceed it either. |
 | Pulse | Recent actions with statuses, labelled repeat counts, failure fingerprints, and whether the approach changed — all computed in code. |
 | Steer | The latest completed observation and the active capability descriptions. |
 | Select | One independent relevance judgment per optional catalog capability, batched by size; code always includes baseline and explicit selections. |
-| Focus | One independent relevance judgment per structural output section (paragraphs, header/child groups, or line windows), with a dependency closure and a byte budget. Off by default — see below. |
+| Focus | One independent relevance judgment per structural output section (paragraphs, header/child groups, or line windows), with a dependency closure, character budget, and UTF-8 source ranges. Off by default — see below. |
 
 Literal facts are never delegated: containment, counts, durations, exit codes and
 budgets are computed in code. A write resolving outside the project root skips
 Gate's judgment entirely and takes the static floor verdict.
+
+## Use the plugin
+
+The public API exposes all seven reflexes independently. Use `createPluginSession`
+for scoped message preparation and approval handoff, or `attachReflexes` for a Pi
+host. Its returned `prompt()` wrapper runs incoming-message judgments; tool hooks
+alone do not intercept user messages. Select can pass suggestions to the main
+agent or ask the host to load the recommended tools/skills.
+
+See the [integration guide](docs/integration/plugin.md) for lifecycle boundaries,
+off/shadow/active modes, recovery, confidence semantics, and telemetry. The
+[typechecked example](packages/pi-adapter/examples/host-plugin.ts) shows how the
+host connects all seven reflexes. Generic judges report unavailable confidence;
+parsing an answer does not automatically authorize an action.
 
 ## Run the reference CLI
 
