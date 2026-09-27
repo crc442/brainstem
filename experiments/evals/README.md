@@ -1,5 +1,7 @@
 # Live evaluation scenarios
 
+For the new seven-reflex paired protocol, start with the [offline validation runner](paired/README.md). Its dry run and scripted fixtures make no provider calls. The older live pilots below remain development evidence.
+
 ```sh
 bun run eval:live
 ```
