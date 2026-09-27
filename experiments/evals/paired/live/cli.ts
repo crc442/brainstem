@@ -22,7 +22,13 @@ function latestCalls(path: string): CallRecord[] {
   if (!existsSync(path)) return [];
   const byId = new Map<string, CallRecord>();
   for (const line of readFileSync(path, "utf8").split("\n").filter(Boolean)) {
-    try { const call = JSON.parse(line); byId.set(call.id, call); } catch { throw new Error("corrupt call ledger; do not infer zero cost"); }
+    try {
+      const call = JSON.parse(line);
+      // Earlier pilot ledgers used 0 to mean Jev had no separate cache rate.
+      // Normalize that accounting convention to unknown cache behavior.
+      if (call.kind === "judge") call.cachedTokens = null;
+      byId.set(call.id, call);
+    } catch { throw new Error("corrupt call ledger; do not infer zero cost"); }
   }
   return [...byId.values()];
 }

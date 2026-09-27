@@ -41,10 +41,11 @@ export class LiveTransport {
       if (!Number.isSafeInteger(input) || input < 0 || !Number.isSafeInteger(output) || output < 0) throw new Error("provider usage unavailable; reservation retained");
       if (input > (kind === "main" ? LIVE.limits.mainContextTokens : LIVE.limits.judgeContextTokens) || kind === "main" && output > LIVE.limits.outputTokens) throw new Error("provider exceeded frozen token bounds");
       call.inputTokens = input; call.outputTokens = output;
-      const cached = kind === "judge" ? 0 : data.usage?.prompt_tokens_details?.cached_tokens;
+      const cached = kind === "judge" ? undefined : data.usage?.prompt_tokens_details?.cached_tokens;
       call.cachedTokens = Number.isSafeInteger(cached) && cached >= 0 && cached <= input ? cached : null;
       call.uncachedCostUpperUsd = (input * prices.input + output * prices.output) / 1e6;
-      call.measuredCostUsd = call.cachedTokens == null ? null : ((input - call.cachedTokens) * prices.input + call.cachedTokens * prices.cached + output * prices.output) / 1e6;
+      // Jev bills all reported input at one rate; its internal cache is unknown.
+      call.measuredCostUsd = kind === "judge" ? call.uncachedCostUpperUsd : call.cachedTokens == null ? null : ((input - call.cachedTokens) * prices.input + call.cachedTokens * prices.cached + output * prices.output) / 1e6;
       call.status = "completed";
       return data;
     } catch (error) {

@@ -53,6 +53,17 @@ test("transport reserves before dispatch, makes no retries, and preserves unknow
   } finally { if (key === undefined) delete process.env.ZAI_API_KEY; else process.env.ZAI_API_KEY = key; rmSync(dir, { recursive: true, force: true }); }
 });
 
+test("Jev's known input price does not manufacture a provider cache measurement", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "live-judge-cache-"));
+  const key = process.env.TYPESAFE_API_KEY; process.env.TYPESAFE_API_KEY = "unit-test-placeholder";
+  try {
+    const transport = new LiveTransport(join(dir, "calls.jsonl"), new AbortController().signal, vi.fn(async () => Response.json({ model: LIVE.models.judge, usage: { input_tokens: 100, output_tokens: 20 } })) as unknown as typeof fetch);
+    await transport.request("judge", { model: LIVE.models.judge, state: "fixture", questions: {} });
+    expect(transport.calls[0]?.cachedTokens).toBeNull();
+    expect(transport.calls[0]?.measuredCostUsd).toBe(100 * 0.042 / 1e6);
+  } finally { if (key === undefined) delete process.env.TYPESAFE_API_KEY; else process.env.TYPESAFE_API_KEY = key; rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("live host dispatches normalized tool declarations and grades actual writes without provider calls", async () => {
   const dir = mkdtempSync(join(tmpdir(), "live-host-"));
   const key = process.env.ZAI_API_KEY; process.env.ZAI_API_KEY = "unit-test-placeholder";
