@@ -63,7 +63,7 @@ function validateAnswer(id: string, question: Question, answer: unknown): Answer
   }
 
   if (a.type !== "choice") fail(`answer "${id}": expected type "choice", got "${String(a.type)}"`);
-  if (typeof a.choice !== "string" || !(a.choice in question.criteria)) {
+  if (typeof a.choice !== "string" || !Object.hasOwn(question.criteria, a.choice)) {
     fail(`answer "${id}": choice must be one of ${Object.keys(question.criteria).join(", ")}`);
   }
   validateProbabilities(id, a.probabilities);

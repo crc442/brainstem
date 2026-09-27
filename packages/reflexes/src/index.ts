@@ -70,7 +70,7 @@ export interface ReflexesOptions {
    * requires passing the WHOLE `gate` sub-object; there is no deep merge.
    */
   policy?: Partial<Policy>;
-  /** Called after every decision. No journal is created unless this or journalPath is supplied. */
+  /** Called after every decision; journalPath alone controls durable logging. */
   onDecision?: (event: ReflexDecisionEvent) => void;
   /** Metadata only: no prompt, tool text, or secrets. Cache hits have zero incremental usage. */
   onJudgment?: (event: JudgmentEvent) => void;

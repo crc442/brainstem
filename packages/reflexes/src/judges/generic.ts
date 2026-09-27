@@ -56,7 +56,7 @@ function toAnswer(id: string, q: Question, raw: unknown): Answer {
   }
   if (typeof raw !== "string") throw new Error(`question "${id}": expected a string`);
   const choice = raw;
-  if (!(choice in q.criteria)) throw new Error(`question "${id}": "${choice}" is not one of ${Object.keys(q.criteria).join(", ")}`);
+  if (!Object.hasOwn(q.criteria, choice)) throw new Error(`question "${id}": "${choice}" is not one of ${Object.keys(q.criteria).join(", ")}`);
   return { type: "choice", choice, probabilities: null, confidence: null, confidenceSource: "unavailable" };
 }
 
