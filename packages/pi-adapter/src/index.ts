@@ -173,6 +173,9 @@ export function attachReflexes(agent: Agent, reflexes: Reflexes, options: Attach
   const originalStop = agent.shouldStopAfterTurn;
   const stop: NonNullable<Agent["shouldStopAfterTurn"]> = async (context, signal) => {
     if (await originalStop?.(context, signal)) return true;
+    // A final answer has no tool progress to assess. Injecting a new user turn
+    // here can restart an already completed task and consume another model call.
+    if (context.toolResults.length === 0) return false;
     if (disposed || ++turns % (options.pulseEveryTurns ?? 3) !== 0) return false;
     const scope = session.scope(signal);
     const decision = await session.checkpoint(

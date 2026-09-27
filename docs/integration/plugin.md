@@ -11,7 +11,7 @@ Brainstem provides seven independent reflexes. The host executes tools, owns per
 | Gate | `messageGate()`, `gate()`; scoped approval through `createPluginSession` | Message wrapper and before-tool hook |
 | Sanitize | `observe()` or `processOutput()` | Exact bounded presented text, including errors that reach the hook |
 | Verify | `observe()` or `processOutput()` | Same text; independently configurable from Sanitize |
-| Pulse | `pulse()` or session `checkpoint()` | After-turn checkpoint, every three turns by default |
+| Pulse | `pulse()` or session `checkpoint()` | After-tool-turn checkpoint, every three tool turns by default |
 | Steer | `steer()` or session `route()` | Before each model dispatch, using a host-provided alternative model |
 
 `attachReflexes(agent, reflexes, options)` returns a handle. Existing code may continue ignoring the return value for tool hooks. Incoming-message features require `handle.prompt(text, options)` or an explicit call to `handle.prepareMessage(...)` before host dispatch. Direct `agent.prompt`, `steer`, and `followUp` calls are not intercepted as incoming user messages. Plugin-generated progress interventions do not recursively trigger Select or message Gate.
@@ -70,7 +70,7 @@ Only configured tools passing through Pi's before/after-tool hooks are covered. 
 
 ## Progress, routing, and cancellation
 
-Pulse consumes bounded progress history. Provide `recentActivity` for useful cross-turn evidence; otherwise the Pi adapter uses the current turn's tool results. It applies a stop through Pi's host checkpoint or queues an intervention. Productive progress clears intervention deduplication; task changes reset history. Host deadlines still apply independently.
+Pulse consumes bounded progress history. Provide `recentActivity` for useful cross-turn evidence; otherwise the Pi adapter uses the current turn's tool results. It applies a stop through Pi's host checkpoint or queues an intervention. Both adapters skip turns without tool results, so a final answer cannot trigger a new Pulse intervention. Productive progress clears intervention deduplication; task changes reset history. Host deadlines still apply independently.
 
 Steer chooses between the current primary model and `miniModel`. With unavailable or unacceptable confidence it keeps the primary. Without a supplied alternative, the host keeps the primary even if a recommendation says mini. Model compatibility, provider credentials, and execution budgets belong to the host. Telemetry distinguishes recommendations from actual dispatched models.
 

@@ -473,7 +473,9 @@ export function createHarness(options: HarnessOptions): Harness {
     },
     streamFn: routedStreamFn,
     toolExecution: "sequential",
-    shouldStopAfterTurn: async () => {
+    shouldStopAfterTurn: async (context) => {
+      // Pulse observes tool progress; a terminal answer must not restart the loop.
+      if (context.toolResults.length === 0) return false;
       turnsCompleted += 1;
       const every = options.pulseEveryTurns ?? 3;
       if (mode("pulse") === "off" || turnsCompleted % every !== 0) return false;
