@@ -1,0 +1,14 @@
+{
+  "schema": 1,
+  "id": "brainstem-development-v1",
+  "phase": "development",
+  "seed": 20260927,
+  "repeats": 1,
+  "arms": ["baseline", "deterministic", "select", "focus", "messageGate", "gate", "sanitize", "verify", "pulse", "steer", "full"],
+  "models": { "primary": null, "mini": null, "judge": null },
+  "pricesUsdPerMillion": { "primary": null, "mini": null, "judge": null },
+  "limits": { "mainCalls": 8, "judgeCalls": 24, "requestBytes": 40000, "outputTokens": 2048, "elapsedMs": 30000, "perRunUsd": 0.10, "studyUsd": 20 },
+  "cache": { "local": "empty-per-run", "provider": "observed" },
+  "approvalDelayMs": 0,
+  "decisionRules": { "completionMargin": 0.05, "maximumFalseBlockIncrease": 0.02, "targetCostReduction": 0.15, "targetLatencyReduction": 0.10 }
+}
