@@ -13,7 +13,7 @@ type Outcome = Awaited<ReturnType<typeof runLiveTask>>;
 function frozenStudy() {
   const source = freeze(validateProtocol(config));
   const jobs = CODING_TASKS.flatMap((task, i) => LIVE.arms.map((_, a) => ({ taskId: task.id, arm: LIVE.arms[(a + i + LIVE.seed % LIVE.arms.length) % LIVE.arms.length]!, snapshotHash: digest(task) })));
-  const maximumStudyUsd = jobs.length * maximumRunCost();
+  const maximumStudyUsd = jobs.length * maximumRunCost() + LIVE.priorStudyCostUpperUsd;
   if (maximumRunCost() > LIVE.limits.perRunUsd || maximumStudyUsd > LIVE.limits.studyUsd) throw new Error("frozen matrix exceeds spending ceiling");
   const data = { mode: "live-development", protocol: LIVE, prompt: SYSTEM, tasks: CODING_TASKS, source: source.source, environment: source.environment, maximumStudyUsd, jobs };
   return { ...data, hash: digest(data) };
@@ -29,6 +29,7 @@ function latestCalls(path: string): CallRecord[] {
 function makeReport(directory: string) {
   const study = JSON.parse(readFileSync(join(directory, "manifest.json"), "utf8")) as ReturnType<typeof frozenStudy>;
   if (digest({ ...study, hash: undefined }) !== study.hash) throw new Error("manifest hash mismatch");
+  const invalidation = existsSync(join(directory, "invalidation.json")) ? JSON.parse(readFileSync(join(directory, "invalidation.json"), "utf8")) : null;
   const rows = study.jobs.map((job) => {
     const id = `${job.taskId}--${job.arm}`;
     const path = join(directory, `${id}.result.json`);
@@ -64,7 +65,7 @@ function makeReport(directory: string) {
       latency: { count: durations.length, p50Ms: durations[Math.ceil(durations.length * 0.5) - 1] ?? null, p95Ms: durations[Math.ceil(durations.length * 0.95) - 1] ?? null },
     };
   });
-  return { manifestHash: study.hash, source: study.source, maximumStudyUsd: study.maximumStudyUsd, summary, rows, conclusion: "Development pilot on four configuration tasks. Too small and narrow for efficacy, safety or tail-latency claims. Individual reflex ablations, representative code edits, independently adjudicated labels and held-out validation remain." };
+  return { manifestHash: study.hash, source: study.source, maximumStudyUsd: study.maximumStudyUsd, invalidation, summary, rows, conclusion: invalidation ? `INVALID STUDY: ${invalidation.reason}` : "Development pilot on four configuration tasks. Too small and narrow for efficacy, safety or tail-latency claims. Individual reflex ablations, representative code edits, independently adjudicated labels and held-out validation remain." };
 }
 
 const [command, requestedDirectory] = process.argv.slice(2);

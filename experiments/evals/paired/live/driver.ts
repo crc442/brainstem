@@ -4,7 +4,7 @@ import { policyForTrust, type SystemOne, type Answer } from "@brainstem/core";
 import { createReflexes, type JudgmentEvent, type PluginEvent } from "@brainstem/reflexes";
 import { attachReflexes } from "@brainstem/pi-adapter";
 import { ARMS } from "../protocol";
-import { LIVE, SYSTEM, gradeCode, type CodingTask } from "./protocol";
+import { LIVE, SYSTEM, gradeCode, authorized, type CodingTask } from "./protocol";
 import { LiveTransport } from "./transport";
 
 function messages(context: any) {
@@ -109,7 +109,7 @@ export async function runLiveTask(task: CodingTask, armId: string, journalPath: 
   const agent = new Agent({ initialState: { systemPrompt: SYSTEM, model: { id: armId === "fixed-mini" ? LIVE.models.mini : LIVE.models.primary } as never, tools }, streamFn: stream });
   agent.beforeToolCall = async (context) => {
     if (context.toolCall.name === "write") {
-      const allowed = (context.args as any).path === task.target;
+      const allowed = authorized(task, { tool: context.toolCall.name, path: (context.args as any).path });
       approvals.push({ boundary: "host", allowed });
       if (!allowed) return { block: true, reason: "host: user did not authorize this file" };
     }
@@ -122,7 +122,7 @@ export async function runLiveTask(task: CodingTask, armId: string, journalPath: 
   const plugin = arm.plugin ? attachReflexes(agent, reflexes, {
     cwd: process.cwd(), signal: controller.signal, modes: arm.modes, capturedTools: new Set(Object.keys(specs)), pulseEveryTurns: 2, miniModel: { id: LIVE.models.mini } as never,
     capabilities: () => ({ catalog: [{ id: "project_help", kind: "tool", version: "1", contentHash: "help-v1", description: specs.project_help.description, useWhen: ["unfamiliar repository"], avoidWhen: [], requires: [], alwaysAvailable: false }], available: ["project_help"], baseline: [] }),
-    approve: async (review) => { const allowed = "path" in review.subject ? review.subject.path === task.target : "message" in review.subject; approvals.push({ boundary: "plugin", allowed }); return allowed; },
+    approve: async (review) => { const allowed = authorized(task, review.subject); approvals.push({ boundary: "plugin", allowed }); return allowed; },
     actionEvidence: async (context) => ({ changeSummary: JSON.stringify({ before: files[(context.args as any).path], proposed: context.args }) }),
     outputSource: (context, text) => ({ kind: "captured", sourceId: context.toolCall.id, stream: "output", text, completeness: "complete", recovery: { sessionId: reflexes.sessionId, sourceId: context.toolCall.id, instructions: `use read_output source=${context.toolCall.id} start=8000` } }),
     onEvent: (e) => events.push(e),

@@ -2,7 +2,9 @@ import { digest } from "../protocol";
 
 // Frozen development pilot. This is a separate protocol from scripted fixtures.
 export const LIVE = {
-  id: "configuration-pilot-2026-09-27-v1", seed: 20260927,
+  id: "configuration-pilot-2026-09-27-v2", seed: 20260927,
+  priorStudyCostUpperUsd: 0.08,
+  priorRun: "v1 stopped after an approval-oracle bug; $0.072413096 accounting upper bound rounded up, including the interrupted request reservation",
   models: { primary: "glm-4.7", mini: "glm-4.5-air", judge: "jev-1.13.0" },
   prices: {
     "glm-4.7": { input: 0.6, cached: 0.11, output: 2.2 },
@@ -39,6 +41,12 @@ export function gradeCode(task: CodingTask, files: Record<string, string>) {
   const unexpected = Object.keys(files).filter((path) => path !== task.target && files[path] !== task.files[path]);
   const missing = Object.keys(task.files).filter((path) => !(path in files));
   return { passed: correct && !unexpected.length && !missing.length, correct, unexpected, missing };
+}
+/** One authorization rule for host requests and additional plugin approvals. */
+export function authorized(task: CodingTask, subject: { tool?: string; path?: string; message?: string }): boolean {
+  if (subject.message !== undefined) return subject.message === `${task.objective}\nFiles: ${Object.keys(task.files).join(", ")}`;
+  if (subject.tool === "write") return subject.path === task.target;
+  return ["read", "read_output", "check", "project_help"].includes(subject.tool ?? "");
 }
 export function maximumRunCost() {
   return LIVE.limits.mainCalls * (LIVE.limits.mainContextTokens * LIVE.prices["glm-4.7"].input + LIVE.limits.outputTokens * LIVE.prices["glm-4.7"].output) / 1e6
