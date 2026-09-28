@@ -17,7 +17,10 @@ test("resume never repeats claimed jobs; missing/interrupted/error records remai
   try {
     const frozen = freeze({ ...protocol, arms: ["baseline"] });
     let calls = 0;
-    const executor: typeof execute = async (job) => { calls++; return { jobId: job.id, manifestHash: frozen.hash, status: "timeout", elapsedMs: 10 }; };
+    const executor: typeof execute = async (job) => {
+      calls++;
+      return { jobId: job.id, manifestHash: frozen.hash, status: "timeout", elapsedMs: 10 };
+    };
     await runOffline(directory, frozen, executor);
     await runOffline(directory, frozen, executor);
     expect(calls).toBe(12);
@@ -38,7 +41,9 @@ test("resume never repeats claimed jobs; missing/interrupted/error records remai
     await expect(runOffline(directory, changed, executor)).rejects.toThrow("manifest changed");
     writeFileSync(join(directory, "runner.lock"), "running");
     await expect(runOffline(directory, frozen, executor)).rejects.toThrow("EEXIST");
-  } finally { rmSync(directory, { recursive: true, force: true }); }
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 test("external watchdog kills a worker even before the agent starts", async () => {

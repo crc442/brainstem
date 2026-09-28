@@ -17,7 +17,25 @@ if (command === "report") {
   const protocol = validateProtocol(JSON.parse(readFileSync(new URL("./protocol.json", import.meta.url), "utf8")));
   const frozen = freeze(protocol);
   if (command === "dry-run") {
-    console.log(JSON.stringify({ mode: frozen.mode, hash: frozen.hash, source: frozen.source, tasks: frozen.tasks.length, arms: protocol.arms.length, repeats: protocol.repeats, jobs: frozen.jobs.length, auxiliaryProviderCalls: 0, offlineCostUsd: 0, live: liveReadiness(protocol, frozen.jobs), matrix: frozen.jobs }, null, 2));
+    console.log(
+      JSON.stringify(
+        {
+          mode: frozen.mode,
+          hash: frozen.hash,
+          source: frozen.source,
+          tasks: frozen.tasks.length,
+          arms: protocol.arms.length,
+          repeats: protocol.repeats,
+          jobs: frozen.jobs.length,
+          auxiliaryProviderCalls: 0,
+          offlineCostUsd: 0,
+          live: liveReadiness(protocol, frozen.jobs),
+          matrix: frozen.jobs,
+        },
+        null,
+        2,
+      ),
+    );
   } else {
     await runOffline(directory!, frozen);
     console.log(`Recorded ${frozen.jobs.length} scheduled jobs in ${directory}. Run eval:paired:report to inspect every status.`);

@@ -1,6 +1,6 @@
 {
   "$schema": "./node_modules/oxfmt/configuration_schema.json",
-  "ignorePatterns": ["experiments/output-focus/results/**", "packages/**/fixtures/**"],
+  "ignorePatterns": ["experiments/output-focus/results/**", "experiments/evals/paired/**/results-*.json", "packages/**/fixtures/**"],
   "printWidth": 140,
   "semi": true,
   "singleQuote": false,

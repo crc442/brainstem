@@ -42,7 +42,9 @@ test("full arm applies each scripted reflex at its host boundary and correlates 
     expect(r.judgments.every((j) => j.taskId === f.id && j.revision === 1)).toBe(true);
     results.set(f.id, r);
   }
-  expect(results.get("capability-helpful").events).toContainEqual(expect.objectContaining({ flow: "select", outcome: "suggested: browser" }));
+  expect(results.get("capability-helpful").events).toContainEqual(
+    expect.objectContaining({ flow: "select", outcome: "suggested: browser" }),
+  );
   expect(results.get("capability-irrelevant").events).toContainEqual(expect.objectContaining({ flow: "select", outcome: "suggested: " }));
   expect(results.get("late-diagnostic").final).toBe("missing-export");
   expect(results.get("recover-exact-fact").recovery.calls).toBe(1);
