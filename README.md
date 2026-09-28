@@ -1,4 +1,9 @@
-<p align="center"><img src="assets/wordmark.png" alt="brainstem" width="420"></p>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/wordmark-dark.png">
+    <img src="assets/wordmark-light.png" alt="brainstem" width="420">
+  </picture>
+</p>
 
 <p align="center">
   <a href="https://github.com/crc442/brainstem/actions/workflows/ci.yml"><img src="https://github.com/crc442/brainstem/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
@@ -7,8 +12,6 @@
 </p>
 
 Brainstem adds fast, narrow judgment checks ("reflexes") to a coding agent: should this tool call run, is this output safe to show the model, is the agent making progress. Judgments come from Jev, TypeSafe's System One model. Your agent still owns execution, permissions, and approvals.
-
-**[Website and live demo](https://crc442.github.io/brainstem/)**
 
 ## What it looks like
 
