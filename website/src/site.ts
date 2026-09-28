@@ -8,3 +8,7 @@ export const docsNav = [
   { id: "integration/plugin", label: "Integration guide" },
   { id: "cli", label: "Reference CLI" },
 ];
+
+export const docsSlug = (id: string) => (id === docsNav[0].id ? undefined : id);
+
+export const docsHref = (id: string) => (docsSlug(id) ? `/docs/${id}/` : "/docs/");
