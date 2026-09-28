@@ -1,72 +1,62 @@
 ---
-const contextByArm = [
-  { arm: "raw", characters: 80616 },
-  { arm: "RTK", characters: 43923 },
-  { arm: "brainstem", characters: 13420, isBrainstem: true },
+const arms = [
+  { arm: "Raw output", characters: 80616, firstTryScore: "23/24" },
+  { arm: "RTK filters", characters: 43923, firstTryScore: "10/24" },
+  { arm: "Brainstem Focus", characters: 13420, firstTryScore: "22/24", isBrainstem: true },
 ];
-const largestCharacterCount = Math.max(...contextByArm.map((entry) => entry.characters));
-
-const firstTryScores = [
-  { arm: "Raw output", score: "23/24" },
-  { arm: "RTK filters", score: "10/24" },
-  { arm: "Brainstem Focus", score: "22/24", isBrainstem: true },
-];
+const largestCharacterCount = Math.max(...arms.map((entry) => entry.characters));
 ---
 
 <section class="block tight">
   <div class="wrap">
     <div class="head">
-      <span class="label">Same task, twice</span>
+      <span class="label">Same 12 tasks, three ways</span>
       <h2>A sixth of the context. Almost all of the answers.</h2>
     </div>
-    <div class="compare">
-      <div class="panel">
-        <span class="cap">Context delivered per tool output · 12 tasks · 4 real captures</span>
-        {contextByArm.map((entry) => (
-          <div class:list={["bar-row", { brainstem: entry.isBrainstem }]}>
-            <span class="arm">{entry.arm}</span>
-            <span class="track"><i style={`width:${(entry.characters / largestCharacterCount) * 100}%`}></i></span>
-            <span class="count">{entry.characters.toLocaleString("en-US")}</span>
+    <div class="panel">
+      <div class="table" role="table">
+        <div class="table-head" role="row">
+          <span role="columnheader"></span>
+          <span role="columnheader">Characters sent to the model</span>
+          <span role="columnheader" class="score-head">First-try correct</span>
+        </div>
+        {arms.map((entry) => (
+          <div class:list={["table-row", { brainstem: entry.isBrainstem }]} role="row">
+            <span class="arm" role="cell">{entry.arm}</span>
+            <span class="bar" role="cell">
+              <span class="track"><i style={`width:${(entry.characters / largestCharacterCount) * 100}%`}></i></span>
+              <span class="count">{entry.characters.toLocaleString("en-US")}</span>
+            </span>
+            <b class="score" role="cell">{entry.firstTryScore}</b>
           </div>
         ))}
-        <span class="cap">Characters. Captures from Vitest, tsc, git log, ripgrep. RTK is the real v0.49.0 binary.</span>
       </div>
-      <div class="panel">
-        <span class="cap">First-try correct answers · Focus pilot</span>
-        <div class="scores">
-          {firstTryScores.map((entry) => (
-            <Fragment>
-              <span class:list={{ brainstem: entry.isBrainstem }}>{entry.arm}</span>
-              <b class:list={{ brainstem: entry.isBrainstem }}>{entry.score}</b>
-            </Fragment>
-          ))}
-        </div>
-        <span class="cap">Both misses were an exhaustive count across every file. Counting now goes to code.</span>
-      </div>
+      <p class="cap">Each task asks a question about real Vitest, tsc, git log or ripgrep output. RTK is an open-source CLI that shrinks command output with fixed filters (the real v0.49.0 binary). Characters are totals across all 12 tasks, measured on the shipped Focus. Accuracy comes from the Focus pilot on the same tasks, 2 runs each. Both brainstem misses were exhaustive counts across every file; counting now goes to code.</p>
     </div>
   </div>
 </section>
 
 <style>
-  .compare { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); gap: 12px; }
-  .panel { background: var(--bg-subtle); border: 1px solid var(--line); border-radius: 14px; padding: 28px; display: grid; gap: 18px; align-content: start; }
-  .cap { font: 13px var(--sans); color: var(--ink-faint); }
-  .bar-row { display: grid; grid-template-columns: 92px 1fr 88px; gap: 14px; align-items: center; font: 14px var(--sans); }
-  .arm { color: var(--ink-soft); }
-  .count { text-align: right; font-variant-numeric: tabular-nums; color: var(--ink); }
+  .panel { background: var(--bg-subtle); border: 1px solid var(--line); border-radius: 14px; padding: 28px; display: grid; gap: 20px; }
+  .cap { font: 13px/1.6 var(--sans); color: var(--ink-faint); max-width: 90ch; }
+  .table { display: grid; gap: 14px; }
+  .table-head, .table-row { display: grid; grid-template-columns: 150px minmax(0, 1fr) 150px; gap: 20px; align-items: center; }
+  .table-head { font: 13px var(--sans); color: var(--ink-faint); }
+  .score-head { text-align: right; }
+  .arm { font: 15px var(--sans); color: var(--ink-soft); }
+  .bar { display: grid; grid-template-columns: minmax(0, 1fr) 72px; gap: 14px; align-items: center; }
   .track { height: 10px; border-radius: 999px; background: var(--line); overflow: hidden; }
   .track i { display: block; height: 100%; border-radius: 999px; background: var(--ink-faint); }
-  .bar-row.brainstem .arm, .bar-row.brainstem .count { color: var(--ink); font-weight: 600; }
-  .bar-row.brainstem .track i { background: var(--ink); }
-  .scores { display: grid; grid-template-columns: 1fr auto; row-gap: 12px; align-items: baseline; }
-  .scores span { font-size: 15px; color: var(--ink-soft); }
-  .scores b { font: 600 28px var(--sans); letter-spacing: -0.03em; font-variant-numeric: tabular-nums; text-align: right; color: var(--ink-faint); }
-  .scores .brainstem { color: var(--ink); }
+  .count { text-align: right; font: 14px var(--sans); font-variant-numeric: tabular-nums; color: var(--ink-soft); }
+  .score { font: 600 28px var(--sans); letter-spacing: -0.03em; font-variant-numeric: tabular-nums; text-align: right; color: var(--ink-soft); }
+  .table-row.brainstem .arm, .table-row.brainstem .count, .table-row.brainstem .score { color: var(--ink); font-weight: 600; }
+  .table-row.brainstem .track i { background: var(--ink); }
 
-  @media (max-width: 900px) {
-    .compare { grid-template-columns: 1fr; }
-  }
   @media (max-width: 560px) {
-    .bar-row { grid-template-columns: 70px 1fr 64px; gap: 10px; }
+    .panel { padding: 20px; }
+    .table-head, .table-row { grid-template-columns: minmax(0, 1fr) 64px; gap: 6px 12px; }
+    .table-head span:nth-child(2) { display: none; }
+    .bar { grid-column: 1 / -1; grid-row: 2; }
+    .score { font-size: 22px; }
   }
 </style>

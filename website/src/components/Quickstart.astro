@@ -1,6 +1,8 @@
 ---
 import { installCommand } from "../site";
 
+const piUrl = "https://github.com/earendil-works/pi-agent-core";
+
 const modes = [
   { name: "off", behavior: "Reflex does not run." },
   { name: "shadow", behavior: "Judges and logs. Changes nothing.", isRecommended: true },
@@ -9,7 +11,7 @@ const modes = [
 
 const owners = [
   { owner: "Your host", responsibilities: "Tool execution, permissions, approval UI, budgets" },
-  { owner: "Brainstem", responsibilities: "Evidence, reflex policies, reviewed output" },
+  { owner: "Brainstem", responsibilities: "Asks the questions and applies verdicts to tool calls and output" },
   { owner: "Jev", responsibilities: "Narrow judgments for all seven reflexes" },
   { owner: "Main model", responsibilities: "Strategy, code, explanations" },
   { owner: "You", responsibilities: "Intent, constraints, approvals" },
@@ -21,25 +23,29 @@ const owners = [
     <div class="head">
       <span class="label">Quickstart</span>
       <h2>Wire it in. Watch before it acts.</h2>
-      <p>Shadow mode runs every judgment and logs what it would have done. Your agent behaves exactly as before until you switch a reflex to active.</p>
+      <p>Shadow mode runs every judgment and logs what it would have done, without applying any verdicts. Output is still capped at 8,000 characters and tagged with a completeness note. Works with <a href={piUrl}>Pi</a> agents today; other hosts can call the reflexes directly.</p>
     </div>
     <div class="quickstart">
       <div class="code" data-code-tabs>
         <div class="tabs" role="tablist">
-          <button type="button" role="tab" id="tab-agent" aria-selected="true" aria-controls="pane-agent">agent.ts</button>
-          <button type="button" role="tab" id="tab-install" aria-selected="false" aria-controls="pane-install">install</button>
+          <button type="button" role="tab" id="tab-install" aria-selected="true" aria-controls="pane-install">install</button>
+          <button type="button" role="tab" id="tab-agent" aria-selected="false" aria-controls="pane-agent">agent.ts</button>
         </div>
-        <pre id="pane-agent" role="tabpanel" aria-labelledby="tab-agent"><span class="comment">// judge: a Jev client using TYPESAFE_API_KEY</span>
-const reflexes = createReflexes(&#123; judge, root: cwd &#125;)
+        <pre id="pane-install" role="tabpanel" aria-labelledby="tab-install">{installCommand}
+export TYPESAFE_API_KEY=<span class="comment">…</span></pre>
+        <pre id="pane-agent" role="tabpanel" aria-labelledby="tab-agent" hidden>import &#123; createReflexes, jevJudge &#125; from <span class="string">'@brainstem/reflexes'</span>
+import &#123; attachReflexes &#125; from <span class="string">'@brainstem/pi-adapter'</span>
 
+const reflexes = createReflexes(&#123; judge: jevJudge() &#125;) <span class="comment">// reads TYPESAFE_API_KEY</span>
+
+<span class="comment">// agent: your existing Pi agent</span>
 const plugin = attachReflexes(agent, reflexes, &#123;
-  cwd,
-  modes: &#123; gate: <span class="string">'shadow'</span>, sanitize: <span class="string">'shadow'</span>, focus: <span class="string">'shadow'</span> &#125;,
+  cwd: process.cwd(),
+  modes: &#123; gate: <span class="string">'shadow'</span>, sanitize: <span class="string">'shadow'</span>, verify: <span class="string">'shadow'</span> &#125;,
 &#125;)
 
 await plugin.prompt(<span class="string">'Fix the failing login test'</span>)</pre>
-        <pre id="pane-install" role="tabpanel" aria-labelledby="tab-install" hidden>{installCommand}
-export TYPESAFE_API_KEY=<span class="comment">…</span></pre>
+        <p class="defaults">By default Gate, Sanitize and Verify are active and the other reflexes are off. The agent.ts example puts all three in shadow so you can watch first.</p>
       </div>
       <div class="stack">
         <div class="rows modes">
@@ -50,6 +56,7 @@ export TYPESAFE_API_KEY=<span class="comment">…</span></pre>
             </div>
           ))}
         </div>
+        <h3>Who does what</h3>
         <div class="rows owners">
           {owners.map((entry) => (
             <div>
@@ -92,10 +99,13 @@ export TYPESAFE_API_KEY=<span class="comment">…</span></pre>
   .rows { border: 1px solid var(--line); border-radius: 14px; overflow: hidden; }
   .rows > div { display: grid; gap: 12px; padding: 14px 20px; border-top: 1px solid var(--line); font-size: 14.5px; color: var(--ink-soft); }
   .rows > div:first-child { border-top: 0; }
-  .modes > div { grid-template-columns: 80px 1fr; }
+  .modes > div { grid-template-columns: 140px 1fr; }
   .modes b { font: 500 13px var(--mono); color: var(--ink); }
   .modes .recommended { background: var(--bg-subtle); }
-  .modes .recommended b::after { content: "start here"; margin-left: 8px; font-size: 10.5px; color: var(--ink-faint); }
+  .modes .recommended b::after { content: "start here"; margin-left: 8px; font-size: 10.5px; color: var(--ink-faint); white-space: nowrap; }
+  .defaults { padding: 14px 20px; border-top: 1px solid var(--line); font-size: 13.5px; color: var(--ink-soft); }
+  .head a { color: inherit; }
+  h3 { margin: 12px 0 -4px; font: 600 15px var(--sans); }
   .owners > div { grid-template-columns: 110px 1fr; padding-block: 12px; font-size: 14px; }
   .owners b { color: var(--ink); font-weight: 500; }
 
