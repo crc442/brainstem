@@ -35,7 +35,7 @@
     },
     "packages/core": {
       "name": "@brainstem/core",
-      "version": "0.2.1",
+      "version": "0.2.2",
       "dependencies": {
         "@typesafe-ai/sdk": "^0.6.0",
       },
