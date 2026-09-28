@@ -193,6 +193,65 @@ test("Pulse can stop at the host checkpoint without dispatching another request"
 });
 
 for (const adapter of ["cli", "pi"] as const) {
+  test(`${adapter}: Pulse cannot reopen a task after its final answer`, async () => {
+    const dir = mkdtempSync(join(tmpdir(), "brainstem-pulse-final-"));
+    try {
+      writeFileSync(join(dir, "log.txt"), "PASS checks");
+      const seen: { model: string; context: any }[] = [];
+      const script = [message([{ type: "toolCall", id: "read1", name: "read", arguments: { path: "log.txt" } }], "toolUse"), done];
+      const judge = mockSystemOne((_state, questions) =>
+        Object.fromEntries(
+          Object.entries(questions).map(([id, q]) => [
+            id,
+            q.type === "score" ? scoreAnswer(2, 0.99) : noulAnswer(id === "repeating" ? 0.99 : 0.01),
+          ]),
+        ),
+      );
+      const modes = {
+        select: "off",
+        focus: "off",
+        messageGate: "off",
+        gate: "off",
+        sanitize: "off",
+        verify: "off",
+        steer: "off",
+        pulse: "active",
+      } as const;
+      if (adapter === "cli") {
+        const harness = createHarness({
+          cwd: dir,
+          systemOne: judge,
+          streamFn: scripted(script, seen),
+          model: { id: "main" } as never,
+          trust: 0.3,
+          journalPath: join(dir, "journal.jsonl"),
+          reflexModes: modes,
+          pulseEveryTurns: 2,
+        });
+        try {
+          await harness.prompt("Check the log and finish.");
+        } finally {
+          harness.endSession();
+        }
+      } else {
+        const agent = new Agent({
+          initialState: { model: { id: "main" } as never, tools: [tool("read", "PASS checks")] },
+          streamFn: scripted(script, seen),
+        });
+        const plugin = attachReflexes(agent, createReflexes({ judge, root: dir }), { cwd: dir, modes, pulseEveryTurns: 2 });
+        try {
+          await plugin.prompt("Check the log and finish.");
+        } finally {
+          plugin.dispose();
+        }
+      }
+      expect(seen).toHaveLength(2);
+      expect(judge.calls).toHaveLength(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test(`${adapter}: long error/output evidence is bounded and only the reviewed view reaches the next request`, async () => {
     const dir = mkdtempSync(join(tmpdir(), "brainstem-contract-"));
     try {

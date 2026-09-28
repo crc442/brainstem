@@ -7,6 +7,12 @@
     "packages/*"
   ],
   "scripts": {
+    "eval:paired:live:dry-run": "bun run experiments/evals/paired/live/cli.ts dry-run",
+    "eval:paired:live": "bun run experiments/evals/paired/live/cli.ts run",
+    "eval:paired:live:report": "bun run experiments/evals/paired/live/cli.ts report",
+    "eval:paired:dry-run": "bun run experiments/evals/paired/cli.ts dry-run",
+    "eval:paired:offline": "bun run experiments/evals/paired/cli.ts offline",
+    "eval:paired:report": "bun run experiments/evals/paired/cli.ts report",
     "exp:access": "bun run experiments/01-access.ts",
     "exp:gate": "bun run experiments/02-gate-corpus.ts",
     "exp:timing": "bun run experiments/03-batch-timing.ts",
