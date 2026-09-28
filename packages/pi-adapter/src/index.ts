@@ -83,7 +83,8 @@ export function attachReflexes(agent: Agent, reflexes: Reflexes, options: Attach
     if (disposed || !capturedTools.has(context.toolCall.name)) return originalBefore?.(context, signal);
     const scope = session.scope(signal);
     if (!scope.current()) return { block: true, reason: "[brainstem] action cancelled" };
-    const identityOf = () => JSON.stringify({ toolCall: context.toolCall, args: context.args });
+    const identityOf = () =>
+      JSON.stringify({ id: context.toolCall.id, name: context.toolCall.name, arguments: context.toolCall.arguments, args: context.args });
     const identity = identityOf();
     const toolCallId = context.toolCall.id;
     const snapshot = structuredClone(context.args ?? {}) as { command?: string; path?: string };
