@@ -12,7 +12,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT license"></a>
 </p>
 
-Brainstem adds fast, narrow judgment checks ("reflexes") to a coding agent. Each reflex answers one question, such as "Should this tool call run?", "Is this output safe to show the model?" or "Is the agent making progress?" Judgments come from Jev, TypeSafe's System One model. Your agent still owns execution, permissions, and approvals.
+Brainstem gives your coding agent reflexes: fast judgments that sit between the agent and its tools. They pause risky actions, block injected instructions, and trim tool output to what the task needs, before the main model ever sees it. Your agent still runs everything.
 
 ## What it looks like
 
@@ -37,7 +37,7 @@ npm install @brainstem/reflexes @brainstem/pi-adapter
 
 ## Quick start
 
-Attach reflexes to an existing [Pi](https://github.com/earendil-works/pi/tree/main/packages/agent) agent:
+Reflex judgments come from Jev, [TypeSafe](https://typesafe.ai)'s judgment model, so you'll need a `TYPESAFE_API_KEY`. Attach reflexes to an existing [Pi](https://github.com/earendil-works/pi/tree/main/packages/agent) agent:
 
 ```ts
 import { createReflexes, jevJudge } from "@brainstem/reflexes";
