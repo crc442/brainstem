@@ -1,6 +1,6 @@
 {
   "name": "@brainstem/reflexes",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "type": "module",
   "sideEffects": false,
   "license": "MIT",
@@ -30,7 +30,7 @@
     "prepack": "../../node_modules/.bin/tsdown --config ../../tsdown.config.ts --filter reflexes"
   },
   "dependencies": {
-    "@brainstem/core": "^0.2.0",
+    "@brainstem/core": "^0.2.1",
     "@typesafe-ai/sdk": "^0.6.0"
   }
 }
