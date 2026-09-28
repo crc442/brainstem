@@ -1,0 +1,108 @@
+---
+import { installCommand } from "../site";
+
+const modes = [
+  { name: "off", behavior: "Reflex does not run." },
+  { name: "shadow", behavior: "Judges and logs. Changes nothing.", isRecommended: true },
+  { name: "active", behavior: "Verdict applies: block, strip, trim, route." },
+];
+
+const owners = [
+  { owner: "Your host", responsibilities: "Tool execution, permissions, approval UI, budgets" },
+  { owner: "Brainstem", responsibilities: "Evidence, reflex policies, reviewed output" },
+  { owner: "Jev", responsibilities: "Narrow judgments for all seven reflexes" },
+  { owner: "Main model", responsibilities: "Strategy, code, explanations" },
+  { owner: "You", responsibilities: "Intent, constraints, approvals" },
+];
+---
+
+<section class="block tight" id="quickstart">
+  <div class="wrap">
+    <div class="head">
+      <span class="label">Quickstart</span>
+      <h2>Wire it in. Watch before it acts.</h2>
+      <p>Shadow mode runs every judgment and logs what it would have done. Your agent behaves exactly as before until you switch a reflex to active.</p>
+    </div>
+    <div class="quickstart">
+      <div class="code" data-code-tabs>
+        <div class="tabs" role="tablist">
+          <button type="button" role="tab" id="tab-agent" aria-selected="true" aria-controls="pane-agent">agent.ts</button>
+          <button type="button" role="tab" id="tab-install" aria-selected="false" aria-controls="pane-install">install</button>
+        </div>
+        <pre id="pane-agent" role="tabpanel" aria-labelledby="tab-agent"><span class="comment">// judge: a Jev client using TYPESAFE_API_KEY</span>
+const reflexes = createReflexes(&#123; judge, root: cwd &#125;)
+
+const plugin = attachReflexes(agent, reflexes, &#123;
+  modes: &#123; gate: <span class="string">'shadow'</span>, sanitize: <span class="string">'shadow'</span>, focus: <span class="string">'shadow'</span> &#125;,
+&#125;)
+
+await plugin.prompt(<span class="string">'Fix the failing login test'</span>)</pre>
+        <pre id="pane-install" role="tabpanel" aria-labelledby="tab-install" hidden>{installCommand}
+export TYPESAFE_API_KEY=<span class="comment">…</span></pre>
+      </div>
+      <div class="stack">
+        <div class="rows modes">
+          {modes.map((mode) => (
+            <div class:list={{ recommended: mode.isRecommended }}>
+              <b>{mode.name}</b>
+              <span>{mode.behavior}</span>
+            </div>
+          ))}
+        </div>
+        <div class="rows owners">
+          {owners.map((entry) => (
+            <div>
+              <b>{entry.owner}</b>
+              <span>{entry.responsibilities}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<script>
+  document.querySelectorAll<HTMLElement>("[data-code-tabs]").forEach((container) => {
+    const tabs = container.querySelectorAll<HTMLButtonElement>("[role=tab]");
+    tabs.forEach((tab) => {
+      tab.addEventListener("click", () => {
+        tabs.forEach((candidate) => {
+          const isSelected = candidate === tab;
+          candidate.setAttribute("aria-selected", String(isSelected));
+          const pane = document.getElementById(candidate.getAttribute("aria-controls") ?? "");
+          if (pane) pane.hidden = !isSelected;
+        });
+      });
+    });
+  });
+</script>
+
+<style>
+  .quickstart { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 12px; align-items: start; }
+  .code { border: 1px solid var(--line); border-radius: 14px; overflow: hidden; background: var(--bg-subtle); }
+  .tabs { display: flex; gap: 2px; padding: 8px; border-bottom: 1px solid var(--line); }
+  .tabs button { background: none; border: 0; padding: 5px 12px; border-radius: 6px; font: 13px var(--sans); color: var(--ink-faint); cursor: pointer; }
+  .tabs button[aria-selected="true"] { background: var(--hover); color: var(--ink); }
+  pre { margin: 0; padding: 20px; font: 13px/1.75 var(--mono); overflow-x: auto; color: var(--ink); }
+  .comment { color: var(--ink-faint); }
+  .string { color: var(--ink-soft); }
+  .stack { display: grid; gap: 12px; }
+  .rows { border: 1px solid var(--line); border-radius: 14px; overflow: hidden; }
+  .rows > div { display: grid; gap: 12px; padding: 14px 20px; border-top: 1px solid var(--line); font-size: 14.5px; color: var(--ink-soft); }
+  .rows > div:first-child { border-top: 0; }
+  .modes > div { grid-template-columns: 80px 1fr; }
+  .modes b { font: 500 13px var(--mono); color: var(--ink); }
+  .modes .recommended { background: var(--bg-subtle); }
+  .modes .recommended b::after { content: "start here"; margin-left: 8px; font-size: 10.5px; color: var(--ink-faint); }
+  .owners > div { grid-template-columns: 110px 1fr; padding-block: 12px; font-size: 14px; }
+  .owners b { color: var(--ink); font-weight: 500; }
+
+  @media (max-width: 900px) {
+    .quickstart { grid-template-columns: 1fr; }
+  }
+  @media (max-width: 560px) {
+    .modes > div { grid-template-columns: 1fr; gap: 2px; }
+    .owners > div { grid-template-columns: 90px 1fr; }
+  }
+</style>

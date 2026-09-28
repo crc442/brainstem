@@ -1,0 +1,33 @@
+---
+const stats = [
+  { value: "83.4%", caption: "less context per tool output than raw" },
+  { value: "69%", caption: "smaller than RTK's fixed output filters" },
+  { value: "22/24", caption: "first-try correct, vs 10/24 for RTK" },
+  { value: "222×", caption: "faster on a repeated judgment, via answer cache" },
+];
+---
+
+<div class="wrap">
+  <div class="stats">
+    {stats.map((stat) => (
+      <div>
+        <span class="value">{stat.value}</span>
+        <p>{stat.caption}</p>
+      </div>
+    ))}
+  </div>
+</div>
+
+<style>
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); border-block: 1px solid var(--line); }
+  .stats > div { padding: 32px 24px; display: grid; gap: 6px; }
+  .stats > div + div { border-left: 1px solid var(--line); }
+  .value { font: 400 40px/1 var(--pixel); }
+  p { font-size: 14px; color: var(--ink-soft); }
+
+  @media (max-width: 900px) {
+    .stats { grid-template-columns: repeat(2, 1fr); }
+    .stats > div:nth-child(3) { border-left: 0; }
+    .stats > div:nth-child(n + 3) { border-top: 1px solid var(--line); }
+  }
+</style>

@@ -1,0 +1,63 @@
+---
+const claims = [
+  { figure: "83.4%", claim: "less context per tool output than raw", source: "focus pilot · 12 tasks · 2026-09-21", isWin: true },
+  { figure: "9/11", claim: "kept the exact evidence a correct answer needs", source: "grounding check · up from 4/11 after a fix", isWin: true },
+  { figure: "216 ms", claim: "median Focus selection latency, 459 ms max", source: "12 live requests", isWin: true },
+  { figure: "$0.004", claim: "total for a three-scenario live security test", source: "live scenarios", isWin: true },
+  { figure: "Tie", claim: "tool selection against a strong model choosing for itself", source: "27-tool registry · includes an adversarial run", isWin: false },
+];
+
+const limits = [
+  "Select matches a strong model on accuracy. The win is cost.",
+  "The benchmark corpus is curated, not production traffic.",
+  "Jev's dollar cost is estimated from tokens. Its API does not report price.",
+  "A paired study of end-to-end task outcomes is in progress.",
+];
+---
+
+<section class="block tight" id="evidence">
+  <div class="wrap">
+    <div class="head">
+      <span class="label">Evidence</span>
+      <h2>Measured, with the limits printed.</h2>
+      <p>Every number came from shipped code running against real captures and real API calls.</p>
+    </div>
+    <div class="evidence">
+      <div class="claims">
+        {claims.map((entry) => (
+          <div class="claim">
+            <span class="figure">{entry.figure}</span>
+            <span>{entry.claim}<span class="source">{entry.source}</span></span>
+            <span class:list={["status", { "no-win": !entry.isWin }]}>{entry.isWin ? "holds" : "no win"}</span>
+          </div>
+        ))}
+      </div>
+      <div class="limits">
+        <h3>What we can't claim yet</h3>
+        <ul>{limits.map((limit) => <li>{limit}</li>)}</ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<style>
+  .evidence { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); gap: 12px; align-items: start; }
+  .claims { border: 1px solid var(--line); border-radius: 14px; overflow: hidden; }
+  .claim { display: grid; grid-template-columns: 110px 1fr auto; gap: 18px; align-items: baseline; padding: 16px 20px; border-top: 1px solid var(--line); }
+  .claim:first-child { border-top: 0; }
+  .figure { font: 600 22px var(--sans); letter-spacing: -0.03em; font-variant-numeric: tabular-nums; }
+  .source { display: block; font: 13px var(--sans); color: var(--ink-faint); margin-top: 2px; }
+  .status { font: 500 12px var(--sans); padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line-strong); color: var(--ink-soft); white-space: nowrap; }
+  .status.no-win { border-style: dashed; }
+  .limits { background: var(--bg-subtle); border: 1px solid var(--line); border-radius: 14px; padding: 24px; display: grid; gap: 14px; }
+  h3 { font: 600 17px var(--sans); }
+  ul { margin: 0; padding-left: 18px; display: grid; gap: 10px; font-size: 14.5px; color: var(--ink-soft); }
+
+  @media (max-width: 900px) {
+    .evidence { grid-template-columns: 1fr; }
+  }
+  @media (max-width: 560px) {
+    .claim { grid-template-columns: 1fr auto; }
+    .figure { grid-column: 1 / -1; }
+  }
+</style>
