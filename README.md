@@ -99,6 +99,10 @@ The `@earendil-works/pi-*` dependencies are pinned deliberately; upgrade them ex
 
 ## Docs
 
+Full docs live at [brainstem.sh/docs](https://brainstem.sh/docs/).
+
+- [Getting started](docs/getting-started.md): install, attach to a Pi agent, shadow mode
+- [Reflexes](docs/reflexes.md): what each reflex decides, modes, trust
 - [Integration guide](docs/integration/plugin.md): lifecycle, modes, approvals, output recovery, confidence, telemetry
 - [Reference CLI internals](docs/cli.md): approvals, file writes, process termination, output recovery, Focus rollout, replay, answer cache
 
