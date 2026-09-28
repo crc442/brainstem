@@ -5,13 +5,14 @@
   </picture>
 </p>
 
+<p align="center"><a href="https://brainstem.sh">brainstem.sh</a></p>
+
 <p align="center">
   <a href="https://github.com/crc442/brainstem/actions/workflows/ci.yml"><img src="https://github.com/crc442/brainstem/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://www.npmjs.com/package/@brainstem/reflexes"><img src="https://img.shields.io/npm/v/@brainstem/reflexes" alt="npm"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT license"></a>
 </p>
 
-Brainstem adds fast, narrow judgment checks ("reflexes") to a coding agent: should this tool call run, is this output safe to show the model, is the agent making progress. Judgments come from Jev, TypeSafe's System One model. Your agent still owns execution, permissions, and approvals.
+Brainstem gives your coding agent reflexes: fast judgments that sit between the agent and its tools. They pause risky actions before they run, and block injected instructions and trim tool output before the main model sees them. Your agent still runs everything.
 
 ## What it looks like
 
@@ -28,9 +29,16 @@ A scripted replay of a real session shape, with no live API calls; token counts 
 npm install @brainstem/reflexes @brainstem/pi-adapter
 ```
 
+| Package | Version | Purpose |
+|---|---|---|
+| [`@brainstem/reflexes`](packages/reflexes) | [![npm](https://img.shields.io/npm/v/@brainstem/reflexes?label=)](https://www.npmjs.com/package/@brainstem/reflexes) | Judgment API (`createReflexes`, `jevJudge`); bring your own judge model |
+| [`@brainstem/pi-adapter`](packages/pi-adapter) | [![npm](https://img.shields.io/npm/v/@brainstem/pi-adapter?label=)](https://www.npmjs.com/package/@brainstem/pi-adapter) | Wires reflexes into a Pi agent (`attachReflexes`) |
+| [`@brainstem/core`](packages/core) | [![npm](https://img.shields.io/npm/v/@brainstem/core?label=)](https://www.npmjs.com/package/@brainstem/core) | Low-level engine, policy, and journal; installed automatically |
+| [`@brainstem/cli`](packages/cli) | not published | Reference host demonstrating the integration (not a sandbox) |
+
 ## Quick start
 
-Attach reflexes to an existing [Pi](https://github.com/earendil-works/pi-agent-core) agent:
+Reflex judgments come from Jev, [TypeSafe](https://typesafe.ai)'s judgment model, so you'll need a `TYPESAFE_API_KEY`. Attach reflexes to an existing [Pi](https://github.com/earendil-works/pi/tree/main/packages/agent) agent:
 
 ```ts
 import { createReflexes, jevJudge } from "@brainstem/reflexes";
@@ -64,15 +72,6 @@ Each reflex runs in `off`, `shadow` (judge and log, don't act), or `active` mode
 ## Trust dial
 
 `trust` (0–1) lowers the confidence bar for auto-running actions: `autoConfidence = 0.95 - 0.35 * trust` (see `packages/core/src/policy.ts`). `trust 0` does not mean "ask about everything". Safety thresholds such as deny lines and credential-access thresholds never change with trust.
-
-## Packages
-
-| Package | Purpose |
-|---|---|
-| [`@brainstem/reflexes`](packages/reflexes) | Judgment API; bring your own judge model |
-| [`@brainstem/pi-adapter`](packages/pi-adapter) | Wires reflexes into a Pi agent |
-| [`@brainstem/core`](packages/core) | Low-level engine, policy, and journal |
-| `@brainstem/cli` | Reference host demonstrating the integration (not a sandbox) |
 
 ## Try the reference CLI
 
