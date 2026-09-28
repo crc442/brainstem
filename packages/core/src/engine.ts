@@ -219,7 +219,9 @@ export function decideGate(answers: Record<string, Answer>, policy: Policy): Gat
   return { action: "auto", reasons };
 }
 
-const SANITIZE_HAZARDS = ["contains_agent_directive", "tries_to_override", "requests_dangerous_action"] as const;
+// Imperative language is descriptive, not a hazard: project guidance and tool
+// receipts often address the agent directly. Task hijacking belongs in override.
+const SANITIZE_HAZARDS = ["tries_to_override", "requests_dangerous_action"] as const;
 
 export function decideSanitize(answers: Record<string, Answer>, policy: Policy): SanitizeDecision {
   const reasons: string[] = [];

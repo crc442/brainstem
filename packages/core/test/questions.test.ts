@@ -25,7 +25,7 @@ describe("gateQuestions", () => {
 });
 
 describe("sanitizeQuestions", () => {
-  test("builds the Phase 0 validated hazard battery", () => {
+  test("keeps the diagnostic directive signal alongside contextual hazard questions", () => {
     const q = sanitizeQuestions();
     expect(Object.keys(q).sort()).toEqual(
       ["contains_agent_directive", "requests_dangerous_action", "severity", "tries_to_override"].sort(),
