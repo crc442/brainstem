@@ -30,8 +30,8 @@ Gate, Sanitize, and Verify are on by default; the rest are opt-in via `modes`. N
 | Reflex | What it does |
 |---|---|
 | Gate | Decides whether a tool call or incoming message runs, asks for approval, or is denied |
-| Sanitize | Flags injected instructions in tool output before the model sees it |
-| Verify | Flags unsupported claims in tool output |
+| Sanitize | Withholds tool output carrying injected instructions before the model sees it |
+| Verify | Checks whether a tool result actually achieved what was asked |
 | Pulse | Detects loops and stalled progress across tool turns |
 | Steer | Routes the next step to the primary or a cheaper model |
 | Select | Picks which optional tools/skills are relevant to the task |
@@ -43,7 +43,7 @@ Each reflex runs in `off`, `shadow` (judge and log, don't act), or `active` mode
 
 ## Trust dial
 
-`trust` (0–1) lowers the confidence bar for auto-running actions: `autoConfidence = 0.95 - 0.35 * trust` (see `packages/core/src/policy.ts`). `trust 0` does not mean "ask about everything". Safety thresholds such as deny lines and credential nouns never change with trust.
+`trust` (0–1) lowers the confidence bar for auto-running actions: `autoConfidence = 0.95 - 0.35 * trust` (see `packages/core/src/policy.ts`). `trust 0` does not mean "ask about everything". Safety thresholds such as deny lines and credential-access thresholds never change with trust.
 
 ## Packages
 
