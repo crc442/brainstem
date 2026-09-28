@@ -18,6 +18,8 @@
     "eval:select-ambiguity": "bun run experiments/evals/select-ambiguity.ts",
     "eval:with-without": "bun run experiments/evals/with-without-harness.ts",
     "eval:focus-vs-rtk": "bun run experiments/evals/focus-vs-rtk.ts",
+    "changeset": "changeset",
+    "version-packages": "changeset version && bun install",
     "test": "vitest run",
     "typecheck": "tsc --noEmit --incremental --tsBuildInfoFile .cache/typecheck.tsbuildinfo -p tsconfig.json",
     "build": "tsdown",
@@ -31,6 +33,7 @@
   },
   "devDependencies": {
     "@arethetypeswrong/core": "0.18.5",
+    "@changesets/cli": "3.0.3",
     "@types/bun": "1.4.2",
     "oxfmt": "0.70.0",
     "oxlint": "1.83.0",
