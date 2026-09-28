@@ -1,6 +1,6 @@
 {
   "name": "@brainstem/pi-adapter",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "type": "module",
   "sideEffects": false,
   "license": "MIT",
@@ -26,7 +26,7 @@
     "prepack": "../../node_modules/.bin/tsdown --config ../../tsdown.config.ts --filter pi-adapter"
   },
   "dependencies": {
-    "@brainstem/reflexes": "^0.2.1"
+    "@brainstem/reflexes": "^0.3.0"
   },
   "peerDependencies": {
     "@earendil-works/pi-agent-core": ">=0.86.1"

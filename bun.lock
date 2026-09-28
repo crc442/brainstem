@@ -42,7 +42,7 @@
     },
     "packages/pi-adapter": {
       "name": "@brainstem/pi-adapter",
-      "version": "0.2.2",
+      "version": "0.3.0",
       "dependencies": {
         "@brainstem/reflexes": "workspace:*",
       },
@@ -57,7 +57,7 @@
     },
     "packages/reflexes": {
       "name": "@brainstem/reflexes",
-      "version": "0.2.1",
+      "version": "0.3.0",
       "dependencies": {
         "@brainstem/core": "workspace:*",
         "@typesafe-ai/sdk": "^0.6.0",
