@@ -27,10 +27,7 @@ export class SelectDriver {
     return now - this.#lastRefreshAt >= this.#minRefreshIntervalMs;
   }
 
-  async refresh(
-    input: { task: string; recent: string[]; discoveryQuery?: string },
-    trigger: SelectTrigger,
-  ): Promise<SelectDecision> {
+  async refresh(input: { task: string; recent: string[]; discoveryQuery?: string }, trigger: SelectTrigger): Promise<SelectDecision> {
     if (this.#mode === "off") return { ...emptyDecision(this.#registry.snapshot()), status: "unavailable" };
     const now = Date.now();
     if (!this.shouldRefresh(trigger, now)) {

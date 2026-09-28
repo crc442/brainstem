@@ -1,27 +1,20 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "module": "ESNext",
+    "module": "Preserve",
     "moduleResolution": "bundler",
-    "types": [
-      "bun-types"
-    ],
+    "allowImportingTsExtensions": true,
+    "types": ["bun"],
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "skipLibCheck": true,
     "noEmit": true,
     "verbatimModuleSyntax": true,
-    "baseUrl": ".",
     "paths": {
-      "@brainstem/core": [
-        "./packages/core/src/index.ts"
-      ],
-      "@brainstem/reflexes": [
-        "./packages/reflexes/src/index.ts"
-      ],
-      "@brainstem/pi-adapter": [
-        "./packages/pi-adapter/src/index.ts"
-      ]
+      "@brainstem/core": ["./packages/core/src/index.ts"],
+      "@brainstem/reflexes": ["./packages/reflexes/src/index.ts"],
+      "@brainstem/reflexes/*": ["./packages/reflexes/src/*"],
+      "@brainstem/pi-adapter": ["./packages/pi-adapter/src/index.ts"]
     }
   },
   "include": [
@@ -30,6 +23,7 @@
     "packages/*/test",
     "packages/*/examples",
     "vitest.config.ts",
-    "packages/*/tsup.config.ts"
+    "tsdown.config.ts",
+    "tsdown.check.config.ts"
   ]
 }

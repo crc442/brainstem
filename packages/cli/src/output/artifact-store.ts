@@ -2,14 +2,14 @@ import { mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync
 import { join } from "node:path";
 import { ARTIFACT_SCHEMA_VERSION, type ArtifactEntry, type ArtifactMeta, type ArtifactStore } from "@brainstem/core";
 
-export const MAX_TOTAL_BYTES = 50 * 1024 * 1024;
+export const MAX_TOTAL_BYTES: number = 50 * 1024 * 1024;
 export const MAX_ARTIFACTS = 200;
 // Retention horizon for tombstones: beyond this many evicted-but-remembered
 // entries, the oldest tombstones are purged entirely. Past that point a
 // request for that id is reported as unknown, not expired — the store no
 // longer has evidence to distinguish the two, and that boundary is the
 // documented, honest one.
-export const MAX_TOMBSTONES = MAX_ARTIFACTS * 2;
+export const MAX_TOMBSTONES: number = MAX_ARTIFACTS * 2;
 
 // artifactId format produced by newId("art") in packages/core/src/evidence.ts.
 const ARTIFACT_ID_PATTERN = /^art_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -28,8 +28,7 @@ interface SessionManifest {
 }
 
 /**
- * File-per-artifact store rooted at a session-scoped directory (see R7:
- * docs/plans/2026-09-22-review-remediation.md). Every write goes through a
+ * File-per-artifact store rooted at a session-scoped directory. Every write goes through a
  * temp file + rename so a crash mid-put can never leave a torn capture:
  * readers see either the previous state or the complete new file.
  *

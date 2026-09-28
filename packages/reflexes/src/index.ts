@@ -1,11 +1,17 @@
 import {
   ReflexEngine,
-  processOutput, type OutputPipelineInput, type ReviewedOutput,
+  processOutput,
+  type OutputPipelineInput,
+  type ReviewedOutput,
   BoundedAnswerCache,
   type AskOptions,
-  type SelectInput, type SelectDecision,
-  type SteerInput, type SteerOptions, type SteerDecision,
-  type MessageGateInput, type PulseDecision,
+  type SelectInput,
+  type SelectDecision,
+  type SteerInput,
+  type SteerOptions,
+  type SteerDecision,
+  type MessageGateInput,
+  type PulseDecision,
   type AnswerCache,
   policyForTrust,
   openJournal,
@@ -16,7 +22,8 @@ import {
   REVIEW_CHAR_CAP,
   type SystemOne,
   type Policy,
-  type Journal, type JournalEvent,
+  type Journal,
+  type JournalEvent,
   type GateInput,
   type GateDecision,
   type ObserveToolResultInput,
@@ -28,7 +35,17 @@ import {
   type BoundedText,
 } from "@brainstem/core";
 
-export type { SystemOne, GateInput, GateDecision, ObserveToolResultInput, SanitizeDecision, VerifyDecision, FocusMode, AskResult, BoundedText };
+export type {
+  SystemOne,
+  GateInput,
+  GateDecision,
+  ObserveToolResultInput,
+  SanitizeDecision,
+  VerifyDecision,
+  FocusMode,
+  AskResult,
+  BoundedText,
+};
 export { boundForReview, REVIEW_CHAR_CAP };
 export { jevJudge } from "./judges/jev";
 export { genericJudge } from "./judges/generic";
@@ -114,17 +131,35 @@ export interface Reflexes {
 export function createReflexes(options: ReflexesOptions): Reflexes {
   const sessionId = newId("sess");
   const sink = options.journalPath ? openJournal(options.journalPath) : undefined;
-  const journal: Journal = { append(event: JournalEvent) {
-    sink?.append(event);
-    if (event.t === "decision") options.onDecision?.({ reflex: event.reflex as ReflexDecisionEvent["reflex"], action: event.action, reasons: event.reasons, judgmentId: event.judgmentId, sessionId });
-    if (event.t === "reflex") {
-      options.onJudgment?.({ sessionId: event.sessionId, judgmentId: event.judgmentId, reflex: event.reflex, status: event.status, taskId: event.taskId, revision: event.revision,
-        model: event.result?.model, durationMs: event.cacheHit ? 0 : event.result?.latencyMs,
-        usage: event.cacheHit ? { inputTokens: 0, outputTokens: 0 } : event.result?.usage ?? { inputTokens: null, outputTokens: null },
-        cacheHit: event.cacheHit === true, cachedFromJudgmentId: event.cachedFromJudgmentId, answerSchema: 2,
-      });
-    }
-  } };
+  const journal: Journal = {
+    append(event: JournalEvent) {
+      sink?.append(event);
+      if (event.t === "decision")
+        options.onDecision?.({
+          reflex: event.reflex as ReflexDecisionEvent["reflex"],
+          action: event.action,
+          reasons: event.reasons,
+          judgmentId: event.judgmentId,
+          sessionId,
+        });
+      if (event.t === "reflex") {
+        options.onJudgment?.({
+          sessionId: event.sessionId,
+          judgmentId: event.judgmentId,
+          reflex: event.reflex,
+          status: event.status,
+          taskId: event.taskId,
+          revision: event.revision,
+          model: event.result?.model,
+          durationMs: event.cacheHit ? 0 : event.result?.latencyMs,
+          usage: event.cacheHit ? { inputTokens: 0, outputTokens: 0 } : (event.result?.usage ?? { inputTokens: null, outputTokens: null }),
+          cacheHit: event.cacheHit === true,
+          cachedFromJudgmentId: event.cachedFromJudgmentId,
+          answerSchema: 2,
+        });
+      }
+    },
+  };
   const policy: Policy = { ...policyForTrust(0.3), ...options.policy };
   const engine = new ReflexEngine({
     systemOne: options.judge,
@@ -196,6 +231,16 @@ export function createReflexes(options: ReflexesOptions): Reflexes {
 
 export type { AskOptions, SelectInput, SelectDecision, SteerInput, SteerOptions, SteerDecision, MessageGateInput, PulseDecision };
 export { createPluginSession, waitForHost } from "./session";
-export type { PluginSession, PluginSessionOptions, PluginModes, PluginFlow, PluginEvent, ReflexMode, CapabilityContext, CapabilityRecommendation, GateReview } from "./session";
+export type {
+  PluginSession,
+  PluginSessionOptions,
+  PluginModes,
+  PluginFlow,
+  PluginEvent,
+  ReflexMode,
+  CapabilityContext,
+  CapabilityRecommendation,
+  GateReview,
+} from "./session";
 
 export type { CapturedOutput, PresentedOutput, ReviewedOutput, OutputPipelineInput } from "@brainstem/core";

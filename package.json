@@ -1,6 +1,8 @@
 {
   "name": "brainstem",
   "private": true,
+  "packageManager": "bun@1.4.2",
+  "type": "module",
   "workspaces": [
     "packages/*"
   ],
@@ -16,18 +18,29 @@
     "eval:select-ambiguity": "bun run experiments/evals/select-ambiguity.ts",
     "eval:with-without": "bun run experiments/evals/with-without-harness.ts",
     "eval:focus-vs-rtk": "bun run experiments/evals/focus-vs-rtk.ts",
+    "changeset": "changeset",
+    "version-packages": "changeset version && bun install",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit -p tsconfig.json",
-    "build": "bun run --cwd packages/core build && bun run --cwd packages/reflexes build && bun run --cwd packages/pi-adapter build"
+    "typecheck": "tsc --noEmit --incremental --tsBuildInfoFile .cache/typecheck.tsbuildinfo -p tsconfig.json",
+    "build": "tsdown",
+    "build:check": "tsdown --config tsdown.check.config.ts",
+    "format": "oxfmt --write \"packages/**/*.ts\" \"packages/*/package.json\" \"experiments/**/*.ts\" \"*.ts\" \"*.json\" \".ox*.json\"",
+    "format:check": "oxfmt --check \"packages/**/*.ts\" \"packages/*/package.json\" \"experiments/**/*.ts\" \"*.ts\" \"*.json\" \".ox*.json\"",
+    "lint": "oxlint --deny-warnings packages experiments tsdown.config.ts tsdown.check.config.ts vitest.config.ts"
   },
   "dependencies": {
     "@typesafe-ai/sdk": "^0.6.0"
   },
   "devDependencies": {
-    "bun-types": "^1.4.2",
-    "typescript": "^5.9.0",
-    "vitest": "^3.2.0",
-    "tsup": "^8.5.1"
+    "@arethetypeswrong/core": "0.18.5",
+    "@changesets/cli": "3.0.3",
+    "@types/bun": "1.4.2",
+    "oxfmt": "0.70.0",
+    "oxlint": "1.83.0",
+    "publint": "0.3.24",
+    "tsdown": "0.23.0",
+    "typescript": "7.0.2",
+    "vitest": "^3.2.0"
   },
   "trustedDependencies": [
     "@google/genai",

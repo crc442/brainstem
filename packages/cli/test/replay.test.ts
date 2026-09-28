@@ -25,12 +25,24 @@ const HIGH_CONF_AUTO = {
   exfiltrates: { type: "noul", noul: 0.02 },
   writes_outside_project: { type: "noul", noul: 0.02 },
   on_task: { type: "noul", noul: 0.95 },
-  disposition: { type: "choice", choice: "auto_run", probabilities: { auto_run: 0.95 }, confidence: 0.95, confidenceSource: "provider-reported" },
+  disposition: {
+    type: "choice",
+    choice: "auto_run",
+    probabilities: { auto_run: 0.95 },
+    confidence: 0.95,
+    confidenceSource: "provider-reported",
+  },
 };
 
 const MID_CONF_AUTO = {
   ...HIGH_CONF_AUTO,
-  disposition: { type: "choice", choice: "auto_run", probabilities: { auto_run: 0.7 }, confidence: 0.7, confidenceSource: "provider-reported" },
+  disposition: {
+    type: "choice",
+    choice: "auto_run",
+    probabilities: { auto_run: 0.7 },
+    confidence: 0.7,
+    confidenceSource: "provider-reported",
+  },
 };
 
 describe("replayJournal", () => {
@@ -196,9 +208,7 @@ describe("replayJournal", () => {
   });
 
   test("a decision whose judgmentId resolves to no reflex event is unsupported, not a crash", () => {
-    const events: JournalEvent[] = [
-      { t: "decision", v: 2, judgmentId: "j_missing", ts: 1, reflex: "gate", action: "auto", reasons: [] },
-    ];
+    const events: JournalEvent[] = [{ t: "decision", v: 2, judgmentId: "j_missing", ts: 1, reflex: "gate", action: "auto", reasons: [] }];
     const report = replayJournal(events, policyForTrust(0.3));
     expect(report.total).toBe(0);
     expect(report.unsupported).toBe(1);

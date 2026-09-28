@@ -1,4 +1,17 @@
-import { constants, closeSync, fchmodSync, fstatSync, fsyncSync, mkdirSync, mkdtempSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import {
+  constants,
+  closeSync,
+  fchmodSync,
+  fstatSync,
+  fsyncSync,
+  mkdirSync,
+  mkdtempSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { createHash } from "node:crypto";
 import { dirname, join } from "node:path";
 import { resolveParentForWrite } from "@brainstem/core";
@@ -47,7 +60,10 @@ export function prepareDemoWrite(root: string, path: string, content: string): P
 /** Best-effort stale-file detection; this is not an atomic compare-and-replace operation. */
 export function checkDemoWrite(prepared: PreparedDemoWrite): { changed: boolean; reason: string } {
   try {
-    if (resolveParentForWrite(prepared.root, prepared.path) !== prepared.target || fileState(prepared.target).key !== prepared.expectedState) {
+    if (
+      resolveParentForWrite(prepared.root, prepared.path) !== prepared.target ||
+      fileState(prepared.target).key !== prepared.expectedState
+    ) {
       return { changed: true, reason: "write target or contents changed since review" };
     }
     return { changed: false, reason: "" };
@@ -75,7 +91,7 @@ export function executeDemoWrite(prepared: PreparedDemoWrite): { target: string;
     try {
       writeFileSync(fd, prepared.content, "utf8");
       // Change permissions through the descriptor, never through a mutable path.
-      fchmodSync(fd, mode ?? (0o666 & ~process.umask()));
+      fchmodSync(fd, mode ?? 0o666 & ~process.umask());
       fsyncSync(fd);
     } finally {
       closeSync(fd);

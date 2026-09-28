@@ -20,7 +20,8 @@ const validRaw = {
     type: "choice",
     choice: "auto_run",
     probabilities: { auto_run: 0.9, ask_user: 0.1, deny: 0 },
-    confidence: 0.9, confidenceSource: "legacy",
+    confidence: 0.9,
+    confidenceSource: "legacy",
   },
 };
 
@@ -51,9 +52,7 @@ describe("validateAnswers", () => {
   });
 
   test("rejects a type mismatch", () => {
-    expectUnavailable(() =>
-      validateAnswers(questions, { ...validRaw, safe: { type: "score", score: 0, confidence: 0.9 } }),
-    );
+    expectUnavailable(() => validateAnswers(questions, { ...validRaw, safe: { type: "score", score: 0, confidence: 0.9 } }));
   });
 
   test("rejects noul outside [0,1] and non-finite noul", () => {
@@ -63,12 +62,8 @@ describe("validateAnswers", () => {
   });
 
   test("rejects score out of the criteria range", () => {
-    expectUnavailable(() =>
-      validateAnswers(questions, { ...validRaw, severity: { type: "score", score: 3, confidence: 0.9 } }),
-    );
-    expectUnavailable(() =>
-      validateAnswers(questions, { ...validRaw, severity: { type: "score", score: -1, confidence: 0.9 } }),
-    );
+    expectUnavailable(() => validateAnswers(questions, { ...validRaw, severity: { type: "score", score: 3, confidence: 0.9 } }));
+    expectUnavailable(() => validateAnswers(questions, { ...validRaw, severity: { type: "score", score: -1, confidence: 0.9 } }));
   });
 
   test("rejects a choice outside the criteria keys", () => {

@@ -2,30 +2,30 @@
   "name": "@brainstem/core",
   "version": "0.2.0",
   "type": "module",
+  "sideEffects": false,
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/crc442/brainstem.git",
+    "url": "git+https://github.com/crc442/brainstem.git",
     "directory": "packages/core"
   },
   "files": [
     "dist"
   ],
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
+  "main": "./dist/index.mjs",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.mts",
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
-    }
+      "types": "./dist/index.d.mts",
+      "default": "./dist/index.mjs"
+    },
+    "./package.json": "./package.json"
   },
   "scripts": {
-    "build": "tsup"
+    "prepack": "../../node_modules/.bin/tsdown --config ../../tsdown.config.ts --filter core"
   },
   "dependencies": {
     "@typesafe-ai/sdk": "^0.6.0"
-  },
-  "devDependencies": {
-    "tsup": "^8.5.1"
   }
 }

@@ -1,11 +1,7 @@
 export const CORE_VERSION = "0.1.0";
 
 export * from "./types";
-export {
-  choice,
-  noul,
-  score,
-} from "./types";
+export { choice, noul, score } from "./types";
 export { JevUnavailableError, JevCancelledError } from "./errors";
 export { jevSystemOne, withCircuitBreaker, DEFAULT_JEV_MODEL } from "./providers/jev";
 export { mockSystemOne, noulAnswer, choiceAnswer, scoreAnswer } from "./providers/mock";
@@ -21,7 +17,16 @@ export { hashAction, canonicalJson, newId } from "./evidence";
 export { boundForReview, REVIEW_CHAR_CAP } from "./presentation";
 export type { BoundedText } from "./presentation";
 export { expandHome, normalizeAbsolute, realpathIfExists, resolvePath, isInside, resolveParentForWrite } from "./paths";
-export { contentHash, countLines, searchContent, sliceByLines, splitLines, InvalidPatternError, ARTIFACT_SCHEMA_VERSION, DEFAULT_MAX_SCAN_CHARS } from "./artifacts";
+export {
+  contentHash,
+  countLines,
+  searchContent,
+  sliceByLines,
+  splitLines,
+  InvalidPatternError,
+  ARTIFACT_SCHEMA_VERSION,
+  DEFAULT_MAX_SCAN_CHARS,
+} from "./artifacts";
 export type { ArtifactMeta, ArtifactRecord, ArtifactEntry, ArtifactStore, StreamMeta, SearchResult } from "./artifacts";
 export type { ApprovalResolution, ApprovalRequest, ApprovalHandler } from "./approval";
 export type { TaskState, ToolObservation, ToolStatus } from "./evidence";
@@ -61,7 +66,17 @@ export type {
   ComputeActiveResult,
   SeedSource,
 } from "./capabilities";
-export { gateQuestions, sanitizeQuestions, pulseQuestions, steerQuestions, verifyQuestions, sanitizeVerifyGroups, GATE_DISPOSITION_CRITERIA, SANITIZE_SEVERITY_LEVELS, CONTINUING_LEVELS } from "./questions";
+export {
+  gateQuestions,
+  sanitizeQuestions,
+  pulseQuestions,
+  steerQuestions,
+  verifyQuestions,
+  sanitizeVerifyGroups,
+  GATE_DISPOSITION_CRITERIA,
+  SANITIZE_SEVERITY_LEVELS,
+  CONTINUING_LEVELS,
+} from "./questions";
 export { policyForTrust, DEFAULT_TRUST } from "./policy";
 export type { Policy } from "./policy";
 export { staticVerdict } from "./floor";
@@ -100,20 +115,9 @@ export {
   decodeSelectId,
   SELECT_BATCH_CHAR_BUDGET,
 } from "./selection";
-export type {
-  SelectableCapability,
-  SelectInput,
-  SelectReason,
-  SelectDecision,
-} from "./selection";
-export {
-  splitIntoSections,
-  dependencyClosure,
-} from "./output-sections";
-export type {
-  OutputSection,
-  SectionManifest,
-} from "./output-sections";
+export type { SelectableCapability, SelectInput, SelectReason, SelectDecision } from "./selection";
+export { splitIntoSections, dependencyClosure } from "./output-sections";
+export type { OutputSection, SectionManifest } from "./output-sections";
 export {
   FOCUS_MIN_CHARS,
   FOCUS_BATCH_CHAR_BUDGET,
@@ -128,15 +132,18 @@ export {
   buildExhaustiveDecision,
   assembleFocusDecision,
 } from "./output-focus";
-export type {
-  FocusMode,
-  FocusSectionReason,
-  FocusInput,
-  FocusDecision,
-} from "./output-focus";
+export type { FocusMode, FocusSectionReason, FocusInput, FocusDecision } from "./output-focus";
 export { computeCacheKey, BoundedAnswerCache } from "./cache";
 export type { AnswerCache, AnswerCacheEntry, BoundedAnswerCacheOptions } from "./cache";
 
 export { judgmentService } from "./judge-service";
 export { processOutput } from "./output-pipeline";
-export type { CapturedOutput, PresentedOutput, ReviewedOutput, SourceRange, OutputPipelineInput, OutputPipelineDeps, OutputMode } from "./output-pipeline";
+export type {
+  CapturedOutput,
+  PresentedOutput,
+  ReviewedOutput,
+  SourceRange,
+  OutputPipelineInput,
+  OutputPipelineDeps,
+  OutputMode,
+} from "./output-pipeline";
