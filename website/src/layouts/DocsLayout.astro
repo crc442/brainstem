@@ -1,0 +1,182 @@
+---
+import type { MarkdownHeading } from "astro";
+import Base from "./Base.astro";
+import Nav from "../components/Nav.astro";
+import { docsHref, docsNav, githubUrl } from "../site";
+
+interface Props {
+  id: string;
+  title: string;
+  headings: MarkdownHeading[];
+}
+
+const { id, title, headings } = Astro.props;
+const sectionHeadings = headings.filter((heading) => heading.depth === 2);
+const sourcePath = `docs/${id}.md`;
+---
+
+<Base title={`${title} · brainstem docs`} description={`Brainstem documentation: ${title}`}>
+  <a class="skip" href="#content">Skip to content</a>
+  <Nav isDocs />
+  <div class="wrap docs">
+    <aside class="sidebar" aria-label="Documentation">
+      <ul>
+        {
+          docsNav.map((entry) => (
+            <li>
+              <a href={docsHref(entry.id)} aria-current={entry.id === id ? "page" : undefined}>
+                {entry.label}
+              </a>
+            </li>
+          ))
+        }
+      </ul>
+    </aside>
+    <main id="content" class="prose">
+      <slot />
+      <p class="edit"><a href={`${githubUrl}/blob/main/${sourcePath}`}>Edit this page on GitHub</a></p>
+    </main>
+    {
+      sectionHeadings.length > 0 && (
+        <aside class="toc" aria-label="On this page">
+          <p class="label">On this page</p>
+          <ul>
+            {sectionHeadings.map((heading) => (
+              <li>
+                <a href={`#${heading.slug}`}>{heading.text}</a>
+              </li>
+            ))}
+          </ul>
+        </aside>
+      )
+    }
+  </div>
+</Base>
+
+<script>
+  const clipboardIcon = `<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2.5" /><path d="M16 8V6.5A2.5 2.5 0 0 0 13.5 4h-7A2.5 2.5 0 0 0 4 6.5v7A2.5 2.5 0 0 0 6.5 16H8" /></svg>`;
+  const checkIcon = `<svg viewBox="0 0 24 24" aria-hidden="true"><path class="check" pathLength="1" d="M5 12.5l4.5 4.5L19 7.5" /></svg>`;
+
+  for (const pre of document.querySelectorAll<HTMLPreElement>(".prose pre")) {
+    const block = document.createElement("div");
+    block.className = "code-block";
+    pre.replaceWith(block);
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "copy-code";
+    button.ariaLabel = "Copy code";
+    button.innerHTML = clipboardIcon;
+    const status = document.createElement("span");
+    status.className = "copy-status";
+    status.setAttribute("role", "status");
+    let resetTimer: ReturnType<typeof setTimeout> | undefined;
+    button.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(pre.innerText);
+      } catch (error) {
+        status.textContent = "Copy failed";
+        console.error("Copying code to the clipboard failed", error);
+        return;
+      }
+      clearTimeout(resetTimer);
+      button.innerHTML = checkIcon;
+      button.dataset.copied = "";
+      status.textContent = "Copied";
+      resetTimer = setTimeout(() => {
+        button.innerHTML = clipboardIcon;
+        delete button.dataset.copied;
+        status.textContent = "";
+      }, 1600);
+    });
+    block.append(pre, button, status);
+  }
+
+  const tocEntries = [...document.querySelectorAll<HTMLAnchorElement>(".toc a")].flatMap((link) => {
+    const heading = document.getElementById(decodeURIComponent(link.hash.slice(1)));
+    return heading ? [{ link, heading }] : [];
+  });
+  const markCurrentSection = () => {
+    const isAtBottom = innerHeight + scrollY >= document.documentElement.scrollHeight - 2;
+    const current = isAtBottom ? tocEntries.at(-1) : tocEntries.findLast(({ heading }) => heading.getBoundingClientRect().top < 120);
+    for (const { link } of tocEntries) link.ariaCurrent = link === current?.link ? "true" : null;
+  };
+  if (tocEntries.length > 0) {
+    markCurrentSection();
+    addEventListener("scroll", markCurrentSection, { passive: true });
+  }
+</script>
+
+<style>
+  .skip { position: absolute; top: -48px; left: 16px; z-index: 30; padding: 8px 14px; border-radius: 8px; font: 500 14px var(--sans); background: var(--ink); color: var(--bg); text-decoration: none; }
+  .skip:focus { top: 12px; }
+
+  .docs { display: grid; grid-template-columns: 180px minmax(0, 1fr) 180px; gap: 40px; padding-block: 48px 96px; }
+  .sidebar, .toc { position: sticky; top: 92px; align-self: start; }
+  .sidebar ul, .toc ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+  .sidebar a { display: block; padding: 6px 10px; border-radius: 6px; font-size: 14px; text-decoration: none; color: var(--ink-soft); }
+  .sidebar a:hover { background: var(--hover); color: var(--ink); }
+  .sidebar a[aria-current="page"] { background: var(--hover); color: var(--ink); font-weight: 500; }
+  .toc .label { margin-bottom: 10px; color: var(--ink-soft); }
+  .toc a { display: block; padding: 3px 0; font-size: 13px; text-decoration: none; color: var(--ink-soft); transition: color 0.15s; }
+  .toc a:hover, .toc a[aria-current] { color: var(--ink); }
+  .toc a[aria-current] { font-weight: 500; }
+
+  .prose { max-width: 40rem; font-size: 16px; line-height: 1.7; }
+  .prose :global(h1) { font: 400 clamp(34px, 4.4vw, 46px)/1.05 var(--display); letter-spacing: -0.02em; margin-bottom: 20px; }
+  .prose :global(h2) { font: 600 24px/1.25 var(--sans); letter-spacing: -0.02em; margin: 56px 0 14px; scroll-margin-top: 80px; }
+  .prose :global(h3) { font: 600 18px/1.3 var(--sans); margin: 32px 0 10px; scroll-margin-top: 80px; }
+  .prose :global(p), .prose :global(ul), .prose :global(ol), .prose :global(pre), .prose :global(table) { margin: 0 0 16px; }
+  .prose :global(li) { margin-bottom: 6px; }
+  .prose :global(a) { text-decoration: underline; text-decoration-color: var(--line-strong); text-underline-offset: 3px; }
+  .prose :global(a:hover) { text-decoration-color: var(--ink); }
+  .prose :global(:not(pre) > code) { font: 0.875em var(--mono); background: var(--hover); border-radius: 4px; padding: 0.1em 0.3em; }
+  .prose :global(pre) { font: 13px/1.75 var(--mono); padding: 18px 20px; border: 1px solid var(--line); border-radius: 14px; overflow-x: auto; }
+  /* Edge shadows appear only while a wide table has more to scroll: the local-attached covers slide away as you scroll. */
+  .prose :global(table) {
+    display: block; overflow-x: auto; border-collapse: collapse; font-size: 14px;
+    background:
+      linear-gradient(to right, var(--bg) 30%, transparent) left / 40px 100%,
+      linear-gradient(to left, var(--bg) 30%, transparent) right / 40px 100%,
+      linear-gradient(to right, color-mix(in srgb, var(--ink) 14%, transparent), transparent) left / 16px 100%,
+      linear-gradient(to left, color-mix(in srgb, var(--ink) 14%, transparent), transparent) right / 16px 100%;
+    background-repeat: no-repeat;
+    background-attachment: local, local, scroll, scroll;
+  }
+  .prose :global(th), .prose :global(td) { text-align: left; vertical-align: top; padding: 10px 14px 10px 0; border-bottom: 1px solid var(--line); }
+  .prose :global(th), .prose :global(td code) { white-space: nowrap; }
+  .prose :global(th) { font-weight: 600; }
+  .prose :global(.code-block) { position: relative; }
+  .prose :global(.copy-code) { position: absolute; top: 14px; right: 12px; display: grid; place-items: center; width: 30px; height: 30px; padding: 0; border: 0; border-radius: 6px; color: var(--ink-faint); background: var(--bg-subtle); cursor: pointer; opacity: 0; transition: opacity 0.15s, color 0.15s, background 0.15s; }
+  .prose :global(.copy-code svg) { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; }
+  .prose :global(.code-block:hover .copy-code), .prose :global(.copy-code:focus-visible), .prose :global(.copy-code[data-copied]) { opacity: 1; }
+  .prose :global(.copy-code:hover) { color: var(--ink); background: var(--hover); }
+  .prose :global(.copy-code[data-copied]) { color: var(--ink); }
+  .prose :global(.copy-code .check) { stroke-width: 2; stroke-dasharray: 1; stroke-dashoffset: 1; animation: draw-check 0.22s ease-out forwards; }
+  .prose :global(.copy-status) { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  .edit { margin-top: 56px !important; font-size: 13px; color: var(--ink-soft); }
+
+  @media (hover: none) {
+    .prose :global(.copy-code) { opacity: 1; }
+  }
+
+  .prose :global(.astro-code) { background-color: var(--bg-subtle) !important; }
+  @media (prefers-color-scheme: dark) {
+    .prose :global(.astro-code span) { color: var(--shiki-dark) !important; }
+    .prose :global(.astro-code) { color: var(--shiki-dark) !important; }
+  }
+
+  @keyframes draw-check { to { stroke-dashoffset: 0; } }
+  @media (prefers-reduced-motion: reduce) {
+    .prose :global(.copy-code .check) { animation: none; stroke-dashoffset: 0; }
+  }
+
+  @media (max-width: 1100px) {
+    .docs { grid-template-columns: 180px minmax(0, 1fr); }
+    .toc { display: none; }
+  }
+  @media (max-width: 760px) {
+    .docs { grid-template-columns: minmax(0, 1fr); gap: 24px; padding-top: 24px; }
+    .sidebar { position: static; }
+    .sidebar ul { display: flex; flex-wrap: wrap; gap: 4px; }
+  }
+</style>
