@@ -1,0 +1,28 @@
+---
+import Mark from "./Mark.astro";
+import { githubUrl } from "../site";
+---
+
+<section class="closing">
+  <Mark class="mark" />
+  <h2>Give your agent reflexes.</h2>
+  <div class="ctas">
+    <a class="btn primary lg" href="#quickstart">Get started</a>
+    <a class="btn lg" href={githubUrl}>Star on GitHub</a>
+  </div>
+</section>
+<footer>
+  <div class="wrap">
+    <span>brainstem · open source</span>
+    <span>gate · sanitize · verify · pulse · steer · select · focus</span>
+  </div>
+</footer>
+
+<style>
+  .closing { text-align: center; display: grid; justify-items: center; gap: 22px; padding: 120px 24px; border-top: 1px solid var(--line); }
+  .closing :global(.mark) { width: 44px; height: auto; color: var(--ink); }
+  h2 { font: 600 clamp(32px, 4.4vw, 52px)/1.05 var(--sans); letter-spacing: -0.04em; max-width: 18ch; }
+  .ctas { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
+  footer { border-top: 1px solid var(--line); }
+  footer .wrap { display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; padding-block: 28px 40px; font: 12.5px var(--sans); color: var(--ink-faint); }
+</style>

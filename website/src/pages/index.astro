@@ -1,0 +1,27 @@
+---
+import Base from "../layouts/Base.astro";
+import Nav from "../components/Nav.astro";
+import Hero from "../components/Hero.astro";
+import Stats from "../components/Stats.astro";
+import Reflexes from "../components/Reflexes.astro";
+import Compare from "../components/Compare.astro";
+import Evidence from "../components/Evidence.astro";
+import Quickstart from "../components/Quickstart.astro";
+import Closing from "../components/Closing.astro";
+---
+
+<Base
+  title="brainstem · reflexes for coding agents"
+  description="A judgment layer between your coding agent and its tools. Pauses risky actions, blocks injected instructions, and trims tool output to what the task needs."
+>
+  <Nav />
+  <Hero />
+  <Stats />
+  <main>
+    <Reflexes />
+    <Compare />
+    <Evidence />
+    <Quickstart />
+  </main>
+  <Closing />
+</Base>

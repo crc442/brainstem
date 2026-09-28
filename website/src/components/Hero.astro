@@ -1,0 +1,72 @@
+---
+import SessionReplay from "./SessionReplay.astro";
+import { installCommand } from "../site";
+
+const reflexLabels = ["SELECT", "GATE", "SANITIZE", "FOCUS", "VERIFY", "PULSE", "STEER"];
+const baselineY = 64;
+const spikeSpacing = 170;
+const spikeCenters = reflexLabels.map((_, index) => 90 + index * spikeSpacing);
+const tracePath =
+  `M0 ${baselineY}` +
+  spikeCenters
+    .map((x) => ` H${x - 26} L${x - 20} ${baselineY - 4} L${x - 14} ${baselineY} L${x - 8} ${baselineY + 6} L${x} 22 L${x + 8} ${baselineY + 12} L${x + 14} ${baselineY}`)
+    .join("") +
+  " H1200";
+---
+
+<header class="hero">
+  <div class="wrap copy">
+    <a class="pill" href="#evidence"><b>v0.2</b>Open source · seven reflexes · measured, not asserted</a>
+    <h1>Your agent thinks. Brainstem flinches.</h1>
+    <p class="sub">A judgment layer between your coding agent and its tools. It pauses risky actions, blocks injected instructions, and trims tool output to what the task needs, before the main model ever sees it.</p>
+    <div class="ctas">
+      <a class="btn primary lg" href="#quickstart">Run it in shadow mode</a>
+      <a class="btn lg" href="#demo">Watch a session</a>
+    </div>
+    <p class="install"><code>{installCommand}</code></p>
+  </div>
+  <div class="trace-line" aria-hidden="true">
+    <svg viewBox="0 0 1200 96" preserveAspectRatio="none">
+      <path class="base" d={tracePath}></path>
+      <path class="run" d={tracePath}></path>
+      {reflexLabels.map((label, index) => <text x={spikeCenters[index]} y="12" text-anchor="middle">{label}</text>)}
+    </svg>
+  </div>
+  <div class="wrap demo" id="demo">
+    <SessionReplay />
+  </div>
+</header>
+
+<style>
+  .hero { position: relative; overflow: hidden; }
+  .hero::before {
+    content: ""; position: absolute; inset: 0; pointer-events: none;
+    background-image: linear-gradient(var(--grid) 1px, transparent 1px), linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+    background-size: 72px 72px; background-position: center -1px;
+    -webkit-mask-image: radial-gradient(ellipse 70% 55% at 50% 30%, #000 20%, transparent 75%);
+    mask-image: radial-gradient(ellipse 70% 55% at 50% 30%, #000 20%, transparent 75%);
+  }
+  .copy { position: relative; display: grid; justify-items: center; text-align: center; gap: 22px; padding-block: 88px 36px; }
+  .pill { display: inline-flex; align-items: center; gap: 10px; font: 500 13px var(--sans); padding: 5px 12px 5px 6px; border: 1px solid var(--line-strong); border-radius: 999px; background: var(--surface); color: var(--ink-soft); text-decoration: none; }
+  .pill b { font-weight: 500; background: var(--ink); color: var(--bg); padding: 1px 8px; border-radius: 999px; }
+  h1 { font: 400 clamp(40px, 7vw, 84px)/1 var(--display); letter-spacing: -0.02em; max-width: 20ch; padding-bottom: 0.06em; background: linear-gradient(180deg, var(--ink) 30%, color-mix(in srgb, var(--ink) 55%, var(--bg)) 100%); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .sub { font-size: 19px; line-height: 1.55; color: var(--ink-soft); max-width: 56ch; }
+  .ctas { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
+  .install { font: 13px var(--mono); color: var(--ink-faint); }
+
+  .trace-line { position: relative; height: 96px; margin-top: 8px; -webkit-mask-image: linear-gradient(90deg, transparent, #000 12%, #000 88%, transparent); mask-image: linear-gradient(90deg, transparent, #000 12%, #000 88%, transparent); }
+  .trace-line svg { width: 100%; height: 100%; display: block; overflow: visible; }
+  .base { fill: none; stroke: var(--line-strong); stroke-width: 1.25; vector-effect: non-scaling-stroke; }
+  .run { fill: none; stroke: var(--ink); stroke-width: 1.75; stroke-dasharray: 140 2600; vector-effect: non-scaling-stroke; animation: sweep 5.5s linear infinite; }
+  text { font: 500 10px var(--sans); fill: var(--ink-faint); letter-spacing: 0.06em; }
+  @keyframes sweep { from { stroke-dashoffset: 140; } to { stroke-dashoffset: -2600; } }
+
+  .demo { position: relative; padding-bottom: 96px; scroll-margin-top: 80px; }
+
+  @media (max-width: 560px) {
+    .copy { padding-block: 56px 24px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .run { animation: none; opacity: 0; }
+  }
+</style>

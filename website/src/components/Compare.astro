@@ -1,0 +1,72 @@
+---
+const contextByArm = [
+  { arm: "raw", characters: 80616 },
+  { arm: "RTK", characters: 43923 },
+  { arm: "brainstem", characters: 13420, isBrainstem: true },
+];
+const largestCharacterCount = Math.max(...contextByArm.map((entry) => entry.characters));
+
+const firstTryScores = [
+  { arm: "Raw output", score: "23/24" },
+  { arm: "RTK filters", score: "10/24" },
+  { arm: "Brainstem Focus", score: "22/24", isBrainstem: true },
+];
+---
+
+<section class="block tight">
+  <div class="wrap">
+    <div class="head">
+      <span class="label">Same task, twice</span>
+      <h2>A sixth of the context. Almost all of the answers.</h2>
+    </div>
+    <div class="compare">
+      <div class="panel">
+        <span class="cap">Context delivered per tool output · 12 tasks · 4 real captures</span>
+        {contextByArm.map((entry) => (
+          <div class:list={["bar-row", { brainstem: entry.isBrainstem }]}>
+            <span class="arm">{entry.arm}</span>
+            <span class="track"><i style={`width:${(entry.characters / largestCharacterCount) * 100}%`}></i></span>
+            <span class="count">{entry.characters.toLocaleString("en-US")}</span>
+          </div>
+        ))}
+        <span class="cap">Characters. Captures from Vitest, tsc, git log, ripgrep. RTK is the real v0.49.0 binary.</span>
+      </div>
+      <div class="panel">
+        <span class="cap">First-try correct answers · Focus pilot</span>
+        <div class="scores">
+          {firstTryScores.map((entry) => (
+            <Fragment>
+              <span class:list={{ brainstem: entry.isBrainstem }}>{entry.arm}</span>
+              <b class:list={{ brainstem: entry.isBrainstem }}>{entry.score}</b>
+            </Fragment>
+          ))}
+        </div>
+        <span class="cap">Both misses were an exhaustive count across every file. Counting now goes to code.</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<style>
+  .compare { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); gap: 12px; }
+  .panel { background: var(--bg-subtle); border: 1px solid var(--line); border-radius: 14px; padding: 28px; display: grid; gap: 18px; align-content: start; }
+  .cap { font: 13px var(--sans); color: var(--ink-faint); }
+  .bar-row { display: grid; grid-template-columns: 92px 1fr 88px; gap: 14px; align-items: center; font: 14px var(--sans); }
+  .arm { color: var(--ink-soft); }
+  .count { text-align: right; font-variant-numeric: tabular-nums; color: var(--ink); }
+  .track { height: 10px; border-radius: 999px; background: var(--line); overflow: hidden; }
+  .track i { display: block; height: 100%; border-radius: 999px; background: var(--ink-faint); }
+  .bar-row.brainstem .arm, .bar-row.brainstem .count { color: var(--ink); font-weight: 600; }
+  .bar-row.brainstem .track i { background: var(--ink); }
+  .scores { display: grid; grid-template-columns: 1fr auto; row-gap: 12px; align-items: baseline; }
+  .scores span { font-size: 15px; color: var(--ink-soft); }
+  .scores b { font: 600 28px var(--sans); letter-spacing: -0.03em; font-variant-numeric: tabular-nums; text-align: right; color: var(--ink-faint); }
+  .scores .brainstem { color: var(--ink); }
+
+  @media (max-width: 900px) {
+    .compare { grid-template-columns: 1fr; }
+  }
+  @media (max-width: 560px) {
+    .bar-row { grid-template-columns: 70px 1fr 64px; gap: 10px; }
+  }
+</style>
