@@ -130,7 +130,7 @@ test("live host dispatches normalized tool declarations and grades actual writes
   }
 });
 
-test("full plugin approval requests cannot turn authorized reads/checks into host denials", async () => {
+test("full plugin reuses host authorizations for reads/checks/writes without duplicate prompts", async () => {
   const dir = mkdtempSync(join(tmpdir(), "live-approval-"));
   const saved = { ZAI_API_KEY: process.env.ZAI_API_KEY, TYPESAFE_API_KEY: process.env.TYPESAFE_API_KEY };
   process.env.ZAI_API_KEY = process.env.TYPESAFE_API_KEY = "unit-test-placeholder";
@@ -177,7 +177,15 @@ test("full plugin approval requests cannot turn authorized reads/checks into hos
     const result = await runLiveTask(task, "full", join(dir, "calls.jsonl"));
     expect(result.completed).toBe(true);
     expect(result.effects.map((e) => e.name)).toEqual(["read", "check", "write"]);
-    expect(result.approvals.filter((a) => a.boundary === "plugin")).toHaveLength(4);
+    // Incoming message approval is distinct; all three tool authorizations reuse
+    // the host's invocation-specific decision. The write still prompts once.
+    expect(result.approvals).toEqual([
+      { boundary: "plugin", allowed: true },
+      { boundary: "host", allowed: true },
+    ]);
+    expect(
+      result.events.filter((event) => event.flow === "gate" && event.phase === "applied" && event.approvalSource === "host"),
+    ).toHaveLength(3);
     expect(result.approvals.every((a) => a.allowed)).toBe(true);
   } finally {
     vi.unstubAllGlobals();
