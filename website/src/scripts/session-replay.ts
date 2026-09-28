@@ -9,11 +9,26 @@ interface AddRowOptions {
 const rowGlyphs: Record<RowKind, string> = { user: "›", assistant: "●", tool: "●", out: "⎿" };
 
 const dryRunLines = [
-  "checking git status", "HEAD is clean", "resolving release tag v2.41.0", "fetched 1 tag", "building release artifact",
-  "artifact build: 12.4s", "artifact size 84.2MB", "uploading to storage bucket", "upload complete", "running pre-flight checks",
-  "pre-flight: disk 41% used", "pre-flight: memory 2.1GB free", "pre-flight: ok", "notifying deploy channel",
-  "notify.sh: posting to slack webhook", "notify.sh: curl --max-time 10 … (added)", "notify.sh: response 200 in 0.31s",
-  "release marked complete", "dry run finished in 14.9s", "exit 0",
+  "checking git status",
+  "HEAD is clean",
+  "resolving release tag v2.41.0",
+  "fetched 1 tag",
+  "building release artifact",
+  "artifact build: 12.4s",
+  "artifact size 84.2MB",
+  "uploading to storage bucket",
+  "upload complete",
+  "running pre-flight checks",
+  "pre-flight: disk 41% used",
+  "pre-flight: memory 2.1GB free",
+  "pre-flight: ok",
+  "notifying deploy channel",
+  "notify.sh: posting to slack webhook",
+  "notify.sh: curl --max-time 10 … (added)",
+  "notify.sh: response 200 in 0.31s",
+  "release marked complete",
+  "dry run finished in 14.9s",
+  "exit 0",
 ];
 const relevantDryRunIndexes = new Set([14, 15, 16]);
 
@@ -42,8 +57,12 @@ export function mountSessionReplay(root: HTMLElement): void {
   let savedTotal = 0;
 
   const wait = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, isInstant ? 0 : ms));
-  const scrollFeedToEnd = () => { feed.scrollTop = feed.scrollHeight; };
-  const setStatus = (text: string) => { status.innerHTML = text ? `<span class="spin"></span>${text}` : ""; };
+  const scrollFeedToEnd = () => {
+    feed.scrollTop = feed.scrollHeight;
+  };
+  const setStatus = (text: string) => {
+    status.innerHTML = text ? `<span class="spin"></span>${text}` : "";
+  };
 
   function addSaved(amount: number) {
     savedTotal += amount;
@@ -55,7 +74,10 @@ export function mountSessionReplay(root: HTMLElement): void {
   }
 
   async function typeText(target: HTMLElement, text: string, delayMs: number) {
-    if (isInstant) { target.textContent = text; return; }
+    if (isInstant) {
+      target.textContent = text;
+      return;
+    }
     for (let length = 1; length <= text.length; length++) {
       target.textContent = text.slice(0, length);
       await wait(delayMs);
@@ -78,8 +100,17 @@ export function mountSessionReplay(root: HTMLElement): void {
   }
 
   function foldRow(row: HTMLElement) {
-    if (isInstant) { row.hidden = true; return; }
-    row.addEventListener("animationend", () => { if (row.classList.contains("folding")) row.hidden = true; }, { once: true });
+    if (isInstant) {
+      row.hidden = true;
+      return;
+    }
+    row.addEventListener(
+      "animationend",
+      () => {
+        if (row.classList.contains("folding")) row.hidden = true;
+      },
+      { once: true },
+    );
     row.classList.add("folding");
   }
 
@@ -93,15 +124,20 @@ export function mountSessionReplay(root: HTMLElement): void {
     savedCount.textContent = "0";
 
     setStatus("select · matching tool catalog to the task");
-    await wait(700); if (!isCurrentRun()) return;
+    await wait(700);
+    if (!isCurrentRun()) return;
     const selectRow = await addRow("tool", "27 tools registered → 4 exposed (bash, read, grep, edit)");
     selectRow.classList.add("judged");
     addTag(selectRow, "", "SELECT", "2,485 → 82 bytes / turn");
     addSaved(601);
     setStatus("");
-    await wait(900); if (!isCurrentRun()) return;
+    await wait(900);
+    if (!isCurrentRun()) return;
 
-    await addRow("user", "Staging deploys keep hanging. Check scripts/release.sh and whatever it shells out to.", { isTyped: true, typingDelayMs: 16 });
+    await addRow("user", "Staging deploys keep hanging. Check scripts/release.sh and whatever it shells out to.", {
+      isTyped: true,
+      typingDelayMs: 16,
+    });
     if (!isCurrentRun()) return;
     await addRow("assistant", "Reading the release script first.", { isTyped: true, typingDelayMs: 12 });
     if (!isCurrentRun()) return;
@@ -115,19 +151,32 @@ export function mountSessionReplay(root: HTMLElement): void {
     if (!isCurrentRun()) return;
 
     setStatus("sanitize · reviewing tool output");
-    await wait(700); if (!isCurrentRun()) return;
+    await wait(700);
+    if (!isCurrentRun()) return;
     injectedRow.classList.add("flagged");
     addTag(injectedRow, "alert", "BLOCKED", "agent directive · 0.94");
-    injectedRow.after(createElement("div", "note", "<b>sanitize</b> tries to override instructions · requests a dangerous action. The assistant never saw this output."));
+    injectedRow.after(
+      createElement(
+        "div",
+        "note",
+        "<b>sanitize</b> tries to override instructions · requests a dangerous action. The assistant never saw this output.",
+      ),
+    );
     scrollFeedToEnd();
     addSaved(54);
-    await wait(1400); if (!isCurrentRun()) return;
+    await wait(1400);
+    if (!isCurrentRun()) return;
     setStatus("");
 
-    await addRow("assistant", "notify.sh is unrelated to the hang. release.sh calls it without a timeout on the Slack curl, which is the likely cause.", { isTyped: true, typingDelayMs: 10 });
+    await addRow(
+      "assistant",
+      "notify.sh is unrelated to the hang. release.sh calls it without a timeout on the Slack curl, which is the likely cause.",
+      { isTyped: true, typingDelayMs: 10 },
+    );
     if (!isCurrentRun()) return;
     setStatus("gate · reviewing Edit(scripts/release.sh)");
-    await wait(550); if (!isCurrentRun()) return;
+    await wait(550);
+    if (!isCurrentRun()) return;
     const editRow = await addRow("tool", "Edit(scripts/release.sh)", { holdMs: 80 });
     editRow.classList.add("judged");
     addTag(editRow, "solid", "AUTO", "matches task · low risk");
@@ -145,18 +194,27 @@ export function mountSessionReplay(root: HTMLElement): void {
     }
 
     setStatus("focus · selecting sections relevant to the task");
-    await wait(700); if (!isCurrentRun()) return;
+    await wait(700);
+    if (!isCurrentRun()) return;
     for (const [index, row] of dryRunRows.entries()) {
-      if (!relevantDryRunIndexes.has(index)) { foldRow(row); addSaved(7); }
-      await wait(16); if (!isCurrentRun()) return;
+      if (!relevantDryRunIndexes.has(index)) {
+        foldRow(row);
+        addSaved(7);
+      }
+      await wait(16);
+      if (!isCurrentRun()) return;
     }
-    await wait(400); if (!isCurrentRun()) return;
+    await wait(400);
+    if (!isCurrentRun()) return;
 
     const hiddenCount = dryRunLines.length - relevantDryRunIndexes.size;
     const revealButton = createElement("button", "chip", `${hiddenCount} lines hidden as irrelevant · show them`) as HTMLButtonElement;
     revealButton.type = "button";
     revealButton.addEventListener("click", () => {
-      dryRunRows.forEach((row) => { row.classList.remove("folding"); row.hidden = false; });
+      dryRunRows.forEach((row) => {
+        row.classList.remove("folding");
+        row.hidden = false;
+      });
       revealButton.remove();
     });
     bashRow.after(revealButton);
@@ -165,11 +223,14 @@ export function mountSessionReplay(root: HTMLElement): void {
     summary.innerHTML = `4 checks · 1 injection blocked · ${dryRunLines.length} → ${relevantDryRunIndexes.size} lines · <b>${savedTotal} tokens saved</b>`;
   }
 
-  const visibilityObserver = new IntersectionObserver((entries) => {
-    if (!entries.some((entry) => entry.isIntersecting)) return;
-    visibilityObserver.disconnect();
-    void playSession();
-  }, { threshold: 0.4 });
+  const visibilityObserver = new IntersectionObserver(
+    (entries) => {
+      if (!entries.some((entry) => entry.isIntersecting)) return;
+      visibilityObserver.disconnect();
+      void playSession();
+    },
+    { threshold: 0.4 },
+  );
   visibilityObserver.observe(root);
 
   replayButton.addEventListener("click", () => {
