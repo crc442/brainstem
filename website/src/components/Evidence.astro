@@ -1,10 +1,16 @@
 ---
+import { githubUrl } from "../site";
+
+const evalsReadme = `${githubUrl}/blob/main/experiments/evals/README.md`;
+const focusPilotReadme = `${githubUrl}/blob/main/experiments/output-focus/README.md`;
+
 const claims = [
-  { figure: "83.4%", claim: "less context per tool output than raw", source: "shipped Focus vs RTK · 12 tasks · 2026-09-21", isWin: true },
-  { figure: "9/11", claim: "kept the exact evidence a correct answer needs", source: "grounding check · up from 4/11 after a fix", isWin: true },
-  { figure: "216 ms", claim: "median Focus selection latency, 459 ms max", source: "focus pilot · 12 live requests", isWin: true },
-  { figure: "$0.004", claim: "total for a three-scenario live security test", source: "live scenarios", isWin: true },
-  { figure: "Tie", claim: "tool selection against a strong model choosing for itself", source: "27-tool registry · includes an adversarial run", isWin: false },
+  { figure: "83.4%", claim: "less tool output sent to the model than raw", source: "shipped Focus vs RTK · 12 tasks · 2026-09-21", sourceUrl: `${evalsReadme}#shipped-focus-vs-rtk`, status: "win" },
+  { figure: "96%", claim: "of full-output accuracy: 22/24 first-try correct vs 23/24 on raw output", source: "Focus pilot · 12 tasks × 2 runs", sourceUrl: focusPilotReadme, status: "tie" },
+  { figure: "9/11", claim: "kept the exact evidence a correct answer needs", source: "shipped Focus · up from 4/11 after a fix", sourceUrl: `${evalsReadme}#shipped-focus-vs-rtk` },
+  { figure: "216 ms", claim: "median time for a Focus judgment, 459 ms max", source: "Focus pilot · 12 live requests", sourceUrl: focusPilotReadme },
+  { figure: "$0.004", claim: "main-model cost to run three live safety checks: an injection, a benign file, a risky delete", source: "live scenarios · Jev's cost is not reported by its API", sourceUrl: `${evalsReadme}#cost` },
+  { figure: "8/8", claim: "runs where a strong model picked the right tool without Select's help", source: "27-tool registry · includes a planted distractor", sourceUrl: `${evalsReadme}#select-vs-self-selection`, status: "tie" },
 ];
 
 const limits = [
@@ -28,8 +34,8 @@ const limits = [
         {claims.map((entry) => (
           <div class="claim">
             <span class="figure">{entry.figure}</span>
-            <span>{entry.claim}<span class="source">{entry.source}</span></span>
-            <span class:list={["status", { "no-win": !entry.isWin }]}>{entry.isWin ? "holds" : "no win"}</span>
+            <span>{entry.claim}<a class="source" href={entry.sourceUrl}>{entry.source}</a></span>
+            {entry.status && <span class:list={["status", { tie: entry.status === "tie" }]}>{entry.status}</span>}
           </div>
         ))}
       </div>
@@ -47,9 +53,10 @@ const limits = [
   .claim { display: grid; grid-template-columns: 110px 1fr auto; gap: 18px; align-items: baseline; padding: 16px 20px; border-top: 1px solid var(--line); }
   .claim:first-child { border-top: 0; }
   .figure { font: 600 22px var(--sans); letter-spacing: -0.03em; font-variant-numeric: tabular-nums; }
-  .source { display: block; font: 13px var(--sans); color: var(--ink-faint); margin-top: 2px; }
+  .source { display: block; width: fit-content; font: 13px var(--sans); color: var(--ink-faint); margin-top: 2px; text-decoration: underline; text-decoration-color: var(--line-strong); text-underline-offset: 3px; }
+  .source:hover { color: var(--ink); }
   .status { font: 500 12px var(--sans); padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line-strong); color: var(--ink-soft); white-space: nowrap; }
-  .status.no-win { border-style: dashed; }
+  .status.tie { border-style: dashed; }
   .limits { background: var(--bg-subtle); border: 1px solid var(--line); border-radius: 14px; padding: 24px; display: grid; gap: 14px; }
   h3 { font: 600 17px var(--sans); }
   ul { margin: 0; padding-left: 18px; display: grid; gap: 10px; font-size: 14.5px; color: var(--ink-soft); }
