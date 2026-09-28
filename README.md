@@ -17,7 +17,7 @@ Brainstem adds fast, narrow judgment checks ("reflexes") to a coding agent: shou
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/demo-dark.gif">
-  <img src="assets/demo-light.gif" alt="Session replay: Select narrows the tool catalog, Sanitize blocks an injected instruction, Gate auto-approves a low-risk edit, Focus trims dry-run output to 3 relevant lines">
+  <img src="assets/demo-light.gif" alt="Session replay: Select narrows the tool catalog, Sanitize blocks an injected instruction, Gate allows a low-risk edit and pauses a risky rm -rf, Focus trims dry-run output to 3 relevant lines">
 </picture>
 
 A scripted replay of a real session shape, with no live API calls; token counts are illustrative.
