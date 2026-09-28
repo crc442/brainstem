@@ -23,7 +23,7 @@ import { attachReflexes } from "@brainstem/pi-adapter";
 
 const agent = new Agent({ /* ...your existing Pi agent config... */ });
 
-const reflexes = createReflexes({ judge: jevJudge({ apiKey: process.env.JEV_API_KEY }) });
+const reflexes = createReflexes({ judge: jevJudge({ apiKey: process.env.TYPESAFE_API_KEY }) });
 
 attachReflexes(agent, reflexes, {
   cwd: process.cwd(),

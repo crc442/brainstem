@@ -2,6 +2,31 @@
 
 Brainstem provides seven independent reflexes. The host executes tools, owns permissions and approvals, retains output, and controls the main agent's resources. Use one `createReflexes` instance per session so caches, the circuit breaker, and progress history have a clear owner.
 
+## Who owns what
+
+| Owner | Responsibilities |
+|---|---|
+| Host agent/runtime | Tool execution, filesystem permissions/isolation, approval UI, execution budgets |
+| Brainstem plugin | Judgment evidence, reflex policies, reviewed output, integration hooks |
+| Jev (System One) | Narrow semantic judgments for all seven reflexes |
+| Main model | Strategy, code, explanations |
+| User | Intent, constraints, approvals |
+
+## Reflex evidence
+
+What each reflex is shown is as much a part of the contract as what it decides:
+
+| Reflex | Evidence it receives |
+|---|---|
+| Gate | The reference CLI supplies the command or a bounded write diff/new-file summary, flagged when incomplete. The Pi adapter snapshots arguments and accepts host-provided change evidence. Message Gate separately reviews incoming requests and source-labelled attachments before host dispatch. |
+| Sanitize / Verify | One bounded envelope: task, source, action summary, capped intent, status, truncation, and the exact content actually delivered — never a second independent slice of the raw capture. Reviewed regardless of `isError`: a thrown tool error's text gets the same review as any other output, not a bypass. The bound is one shared character cap (`packages/core/src/presentation.ts`, `REVIEW_CHAR_CAP` = 8,000 chars) applied once, before both Sanitize and delivery — a single very long line cannot exceed it either. |
+| Pulse | Recent actions with statuses, labelled repeat counts, failure fingerprints, and whether the approach changed — all computed in code. |
+| Steer | The latest completed observation and the active capability descriptions. |
+| Select | One independent relevance judgment per optional catalog capability, batched by size; code always includes baseline and explicit selections. |
+| Focus | One independent relevance judgment per structural output section (paragraphs, header/child groups, or line windows), with a dependency closure, character budget, and UTF-8 source ranges. Off by default. |
+
+Literal facts are never delegated: containment, counts, durations, exit codes and budgets are computed in code. A write resolving outside the project root skips Gate's judgment entirely and takes the static floor verdict.
+
 ## Public API and lifecycle
 
 | Reflex | Public API | Pi integration |

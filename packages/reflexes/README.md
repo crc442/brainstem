@@ -22,7 +22,7 @@ npm install @brainstem/reflexes
 import { createReflexes, jevJudge } from "@brainstem/reflexes";
 
 const reflexes = createReflexes({
-  judge: jevJudge({ apiKey: process.env.JEV_API_KEY }),
+  judge: jevJudge({ apiKey: process.env.TYPESAFE_API_KEY }),
 });
 
 // Gate — should this tool call run automatically?
