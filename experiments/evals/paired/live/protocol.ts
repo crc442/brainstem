@@ -2,11 +2,11 @@ import { digest } from "../protocol";
 
 // Frozen development pilot. This is a separate protocol from scripted fixtures.
 export const LIVE = {
-  id: "configuration-pilot-2026-09-27-v2",
+  id: "configuration-pilot-2026-09-28-v3",
   seed: 20260927,
-  priorStudyCostUpperUsd: 0.08,
+  priorStudyCostUpperUsd: 0.12,
   priorRun:
-    "v1 stopped after an approval-oracle bug; $0.072413096 accounting upper bound rounded up, including the interrupted request reservation",
+    "v1/v2 pilot upper accounting $0.113459714 plus all Sanitize probes $0.001912512, rounded up; retains the interrupted v1 request reservation",
   models: { primary: "glm-4.7", mini: "glm-4.5-air", judge: "jev-1.13.0" },
   prices: {
     "glm-4.7": { input: 0.6, cached: 0.11, output: 2.2 },
@@ -19,7 +19,7 @@ export const LIVE = {
     "https://docs.typesafe.ai/models",
     "https://docs.z.ai/api-reference/llm/chat-completion",
   ],
-  checkedAt: "2026-09-27",
+  checkedAt: "2026-09-28",
   endpoints: { main: "https://api.z.ai/api/paas/v4/chat/completions", judge: "https://api.typesafe.ai/v1/systemone" },
   limits: {
     mainCalls: 6,
