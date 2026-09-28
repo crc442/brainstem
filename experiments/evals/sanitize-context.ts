@@ -58,7 +58,15 @@ try {
       }),
     };
     const response = await transport.request("judge", { model: LIVE.models.judge, state, questions });
-    const answers = validateAnswers(questions, response.answers);
+    const answers = validateAnswers(
+      questions,
+      Object.fromEntries(
+        Object.entries(response.answers as Record<string, Record<string, unknown>>).map(([id, answer]) => [
+          id,
+          answer.type === "noul" ? answer : { ...answer, confidenceSource: "provider-reported" },
+        ]),
+      ),
+    );
     const decision = decideSanitize(answers, policy);
     const row = { id: fixture.id, expected: fixture.expected, decision, answers, matched: decision.action === fixture.expected };
     rows.push(row);
