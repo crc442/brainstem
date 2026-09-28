@@ -5,7 +5,7 @@
 # @brainstem/pi-adapter
 
 Wires [`@brainstem/reflexes`](../reflexes) into a
-[Pi](https://github.com/earendil-works/pi-agent-core) `Agent` — one function
+[Pi](https://github.com/earendil-works/pi/tree/main/packages/agent) `Agent` — one function
 call, no wrapper agent, no fork of Pi's loop.
 
 ## Install

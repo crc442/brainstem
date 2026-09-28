@@ -5,13 +5,14 @@
   </picture>
 </p>
 
+<p align="center"><a href="https://brainstem.sh">brainstem.sh</a></p>
+
 <p align="center">
   <a href="https://github.com/crc442/brainstem/actions/workflows/ci.yml"><img src="https://github.com/crc442/brainstem/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://www.npmjs.com/package/@brainstem/reflexes"><img src="https://img.shields.io/npm/v/@brainstem/reflexes" alt="npm"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT license"></a>
 </p>
 
-Brainstem adds fast, narrow judgment checks ("reflexes") to a coding agent: should this tool call run, is this output safe to show the model, is the agent making progress. Judgments come from Jev, TypeSafe's System One model. Your agent still owns execution, permissions, and approvals.
+Brainstem adds fast, narrow judgment checks ("reflexes") to a coding agent. Each reflex answers one question, such as "Should this tool call run?", "Is this output safe to show the model?" or "Is the agent making progress?" Judgments come from Jev, TypeSafe's System One model. Your agent still owns execution, permissions, and approvals.
 
 ## What it looks like
 
@@ -28,9 +29,15 @@ A scripted replay of a real session shape, with no live API calls; token counts 
 npm install @brainstem/reflexes @brainstem/pi-adapter
 ```
 
+| Package | Version | What it is |
+|---|---|---|
+| [`@brainstem/reflexes`](packages/reflexes) | [![npm](https://img.shields.io/npm/v/@brainstem/reflexes?label=)](https://www.npmjs.com/package/@brainstem/reflexes) | The reflexes API: `createReflexes`, `jevJudge` |
+| [`@brainstem/pi-adapter`](packages/pi-adapter) | [![npm](https://img.shields.io/npm/v/@brainstem/pi-adapter?label=)](https://www.npmjs.com/package/@brainstem/pi-adapter) | `attachReflexes` for Pi agents |
+| [`@brainstem/core`](packages/core) | [![npm](https://img.shields.io/npm/v/@brainstem/core?label=)](https://www.npmjs.com/package/@brainstem/core) | The engine both depend on; installed automatically |
+
 ## Quick start
 
-Attach reflexes to an existing [Pi](https://github.com/earendil-works/pi-agent-core) agent:
+Attach reflexes to an existing [Pi](https://github.com/earendil-works/pi/tree/main/packages/agent) agent:
 
 ```ts
 import { createReflexes, jevJudge } from "@brainstem/reflexes";
