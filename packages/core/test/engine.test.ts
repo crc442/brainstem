@@ -126,6 +126,14 @@ describe("decideGate (pure)", () => {
 });
 
 describe("decideSanitize (pure)", () => {
+  test.each([0.49, 0.86, 1])("passes directive-only evidence at %s", (directive) => {
+    expect(decideSanitize(sanitizeScript({ contains_agent_directive: noulAnswer(directive) })(), POLICY).action).toBe("pass");
+  });
+
+  test.each(["tries_to_override", "requests_dangerous_action"])("blocks %s without an agent-addressed directive", (hazard) => {
+    expect(decideSanitize(sanitizeScript({ [hazard]: noulAnswer(0.98) })(), POLICY).action).toBe("block");
+  });
+
   test("passes clean tool output", () => {
     expect(decideSanitize(sanitizeScript({})(), POLICY).action).toBe("pass");
   });
