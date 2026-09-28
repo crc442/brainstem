@@ -6,7 +6,7 @@
 
 A standalone library of bounded judgment reflexes for coding agents: `gate`
 risky tool calls, `observe` tool results for injected instructions and
-unsupported claims, and `focus` large output down to what's relevant. Bring
+whether they achieved what was asked, and `focus` large output down to what's relevant. Bring
 your own judge model — this package has no hard dependency on any one
 provider.
 
