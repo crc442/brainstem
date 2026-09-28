@@ -241,6 +241,8 @@ export type {
   CapabilityContext,
   CapabilityRecommendation,
   GateReview,
+  ExistingActionApproval,
+  ActionApprovalResolver,
 } from "./session";
 
 export type { CapturedOutput, PresentedOutput, ReviewedOutput, OutputPipelineInput } from "@brainstem/core";

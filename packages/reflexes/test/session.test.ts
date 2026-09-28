@@ -1,4 +1,4 @@
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 import { mockSystemOne, choiceAnswer, noulAnswer, scoreAnswer, type Answer, type CapabilityDescriptor } from "@brainstem/core";
 import { createReflexes, createPluginSession } from "../src";
 
@@ -59,6 +59,137 @@ test("approval receives an action snapshot; a concurrent argument change invalid
   });
   expect((await session.reviewAction(action)).allowed).toBe(false);
 });
+
+test.each(["approved", "denied", "unknown"] as const)("existing host authorization: %s", async (resolution) => {
+  const approve = vi.fn(async () => true);
+  const events: import("../src").PluginEvent[] = [];
+  const session = createPluginSession(
+    createReflexes({ judge: mockSystemOne(() => ({ ...safe(), disposition: choiceAnswer("ask_user", 0.9) })) }),
+    {
+      approve,
+      onEvent: (event) => events.push(event),
+    },
+  );
+  const result = await session.reviewAction({ tool: "bash", command: "echo hi", task: "hi" }, undefined, async (review) => {
+    expect(review.sessionId).toBe(session.sessionId);
+    expect(review.revision).toBe(0);
+    (review.subject as { command: string }).command = "mutation of callback copy";
+    return resolution;
+  });
+  expect(result.allowed).toBe(resolution !== "denied");
+  expect(approve).toHaveBeenCalledTimes(resolution === "unknown" ? 1 : 0);
+  expect(events.at(-1)).toMatchObject({ phase: "applied", approvalSource: resolution === "unknown" ? "prompt" : "host" });
+});
+
+test("unknown host authorization without an approver remains blocked", async () => {
+  const session = createPluginSession(
+    createReflexes({ judge: mockSystemOne(() => ({ ...safe(), disposition: choiceAnswer("ask_user", 0.9) })) }),
+  );
+  expect((await session.reviewAction({ tool: "bash", command: "echo hi", task: "hi" }, undefined, async () => "unknown")).allowed).toBe(
+    false,
+  );
+});
+
+test("Gate denial cannot be overridden by host approval", async () => {
+  const resolve = vi.fn(async () => "approved" as const);
+  const approve = vi.fn(async () => true);
+  const session = createPluginSession(
+    createReflexes({ judge: mockSystemOne(() => ({ ...safe(), disposition: choiceAnswer("deny", 0.99) })) }),
+    { approve },
+  );
+  expect((await session.reviewAction({ tool: "bash", command: "echo hi", task: "hi" }, undefined, resolve)).allowed).toBe(false);
+  expect(resolve).not.toHaveBeenCalled();
+  expect(approve).not.toHaveBeenCalled();
+});
+
+test("cached Gate judgments never cache or transfer host authorization", async () => {
+  const judge = mockSystemOne(() => ({ ...safe(), disposition: choiceAnswer("ask_user", 0.9) }));
+  const session = createPluginSession(createReflexes({ judge }));
+  const input = { tool: "bash", command: "echo hi", task: "hi" };
+  expect((await session.reviewAction(input, undefined, async () => "approved")).allowed).toBe(true);
+  expect((await session.reviewAction(input, undefined, async () => "unknown")).allowed).toBe(false);
+  expect(judge.calls).toHaveLength(1);
+  await session.prepareMessage({ taskId: "new", task: "hi", message: "hi", constraints: [] });
+  expect((await session.reviewAction(input)).allowed).toBe(false);
+  const other = createPluginSession(createReflexes({ judge }));
+  expect((await other.reviewAction(input)).allowed).toBe(false);
+});
+
+test.each(["mutation", "new-message", "dispose"] as const)("%s invalidates pending host approval without another prompt", async (kind) => {
+  const approve = vi.fn(async () => true);
+  const session = createPluginSession(
+    createReflexes({ judge: mockSystemOne(() => ({ ...safe(), disposition: choiceAnswer("ask_user", 0.9) })) }),
+    { approve },
+  );
+  const input = { tool: "bash", command: "echo hi", task: "hi" };
+  const result = session.reviewAction(input, undefined, async () => {
+    if (kind === "mutation") input.command = "echo changed";
+    else if (kind === "dispose") session.dispose();
+    else await session.prepareMessage({ taskId: "new", task: "new", message: "new", constraints: [] });
+    return "unknown";
+  });
+  if (kind === "mutation") expect((await result).allowed).toBe(false);
+  else await expect(result).rejects.toThrow(/cancel/);
+  expect(approve).not.toHaveBeenCalled();
+});
+
+test("message approval stays separate from an existing action approval", async () => {
+  const approve = vi.fn(async () => false);
+  const session = createPluginSession(
+    createReflexes({
+      judge: mockSystemOne((_state, questions) =>
+        Object.keys(questions).length === 1
+          ? { disposition: choiceAnswer("ask_user", 0.9) }
+          : { ...safe(), disposition: choiceAnswer("ask_user", 0.9) },
+      ),
+    }),
+    {
+      approve,
+      modes: { messageGate: "active" },
+    },
+  );
+  expect((await session.reviewAction({ tool: "bash", command: "echo hi", task: "hi" }, undefined, async () => "approved")).allowed).toBe(
+    true,
+  );
+  expect((await session.prepareMessage({ taskId: "t", task: "hi", message: "hi", constraints: [] })).allowed).toBe(false);
+  expect(approve).toHaveBeenCalledTimes(1);
+});
+
+test.each(["off", "shadow", "advisory"] as const)("%s never consults authorization or prompts", async (mode) => {
+  const approve = vi.fn(async () => true);
+  const resolver = vi.fn(async () => "approved" as const);
+  const session = createPluginSession(
+    createReflexes({ judge: mockSystemOne(() => ({ ...safe(), disposition: choiceAnswer("ask_user", 0.9) })) }),
+    {
+      approve,
+      modes: { gate: mode === "advisory" ? "active" : mode },
+      gateBehavior: mode === "advisory" ? "advisory" : "enforce",
+    },
+  );
+  expect((await session.reviewAction({ tool: "bash", command: "echo hi", task: "hi" }, undefined, resolver)).allowed).toBe(true);
+  expect(resolver).not.toHaveBeenCalled();
+  expect(approve).not.toHaveBeenCalled();
+});
+
+test.each(["invalid", "error", "cancel"] as const)(
+  "%s host resolution cannot authorize or fall through to a second prompt",
+  async (kind) => {
+    const approve = vi.fn(async () => true);
+    const controller = new AbortController();
+    const session = createPluginSession(
+      createReflexes({ judge: mockSystemOne(() => ({ ...safe(), disposition: choiceAnswer("ask_user", 0.9) })) }),
+      { approve },
+    );
+    const pending = session.reviewAction({ tool: "bash", command: "echo hi", task: "hi" }, controller.signal, async () => {
+      if (kind === "invalid") return true as never;
+      if (kind === "error") throw new Error("host unavailable");
+      controller.abort();
+      return new Promise(() => {});
+    });
+    await expect(pending).rejects.toThrow(/invalid|unavailable|cancel/);
+    expect(approve).not.toHaveBeenCalled();
+  },
+);
 
 test("off makes no calls and shadow does not block", async () => {
   const provider = mockSystemOne(() => ({ ...safe(), disposition: choiceAnswer("deny", 1) }));

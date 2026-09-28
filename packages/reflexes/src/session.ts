@@ -32,6 +32,7 @@ export interface PluginEvent {
   outcome: string;
   durationMs?: number;
   subjectId?: string;
+  approvalSource?: "host" | "prompt";
 }
 export interface CapabilityContext {
   catalog: CapabilityDescriptor[];
@@ -48,11 +49,15 @@ export interface CapabilityRecommendation {
   reasons: Record<string, unknown>;
 }
 export interface GateReview {
+  sessionId: string;
   subjectId: string;
   revision: number;
   subject: Readonly<GateInput | MessageGateInput>;
   decision: GateDecision;
 }
+/** Host-owned authorization for this invocation; never inferred from a nonblocking hook. */
+export type ExistingActionApproval = "approved" | "denied" | "unknown";
+export type ActionApprovalResolver = (review: GateReview, signal: AbortSignal) => Promise<ExistingActionApproval>;
 export interface PluginSessionOptions {
   modes?: PluginModes;
   /** Active gates may advise without blocking when explicitly configured. */
@@ -106,7 +111,19 @@ export function createPluginSession(reflexes: Reflexes, options: PluginSessionOp
     durationMs?: number,
     subjectId?: string,
     atRevision = revision,
-  ) => options.onEvent?.({ sessionId, revision: atRevision, flow, mode: modes[flow], phase, outcome, durationMs, subjectId });
+    approvalSource?: PluginEvent["approvalSource"],
+  ) =>
+    options.onEvent?.({
+      sessionId,
+      revision: atRevision,
+      flow,
+      mode: modes[flow],
+      phase,
+      outcome,
+      durationMs,
+      subjectId,
+      ...(approvalSource ? { approvalSource } : {}),
+    });
   const scope = (signal?: AbortSignal) => {
     if (disposed) throw new Error("plugin session disposed");
     const signals = [controller.signal, options.signal, signal].filter((s): s is AbortSignal => !!s);
@@ -123,32 +140,50 @@ export function createPluginSession(reflexes: Reflexes, options: PluginSessionOp
     event(flow, "judged", "completed", performance.now() - start, undefined, s.revision);
     return result;
   }
-  async function gate(flow: "gate" | "messageGate", input: GateInput | MessageGateInput, signal?: AbortSignal) {
+  async function gate(
+    flow: "gate" | "messageGate",
+    input: GateInput | MessageGateInput,
+    signal?: AbortSignal,
+    resolveApproval?: ActionApprovalResolver,
+  ) {
     const s = scope(signal);
     const snapshot = structuredClone(input);
     const subjectId = hashAction(snapshot);
-    if (modes[flow] === "off") return { allowed: s.current(), decision: undefined, subjectId };
+    if (modes[flow] === "off") return { allowed: s.current(), decision: undefined, subjectId, approvalSource: undefined };
     const decision = await judge(
       flow,
       (opts) => (flow === "gate" ? reflexes.gate(snapshot as GateInput, opts) : reflexes.messageGate(snapshot as MessageGateInput, opts)),
       s.signal,
     );
+    const current = () => s.current() && hashAction(input) === subjectId;
+    const review = (): GateReview => ({
+      sessionId,
+      subjectId,
+      revision: s.revision,
+      subject: structuredClone(snapshot),
+      decision: structuredClone(decision),
+    });
     let allowed = true;
+    let approvalSource: PluginEvent["approvalSource"];
     if (modes[flow] === "active" && options.gateBehavior !== "advisory") {
       allowed = decision.action === "auto";
-      if (decision.action === "ask" && options.approve) {
-        // Callback receives a separate copy; its mutations cannot change the reviewed subject.
-        allowed = await waitForHost(
-          () =>
-            options.approve!(
-              { subjectId, revision: s.revision, subject: structuredClone(snapshot), decision: structuredClone(decision) },
-              s.signal,
-            ),
-          s.signal,
-        );
+      if (decision.action === "ask" && current()) {
+        // A host may reuse an explicit approval or permission rule. This lookup
+        // is invocation-local, never cached with the model's judgment.
+        const existing =
+          flow === "gate" && resolveApproval ? await waitForHost(() => resolveApproval(review(), s.signal), s.signal) : "unknown";
+        if (!["approved", "denied", "unknown"].includes(existing)) throw new Error("invalid host approval resolution");
+        if (existing !== "unknown") {
+          allowed = existing === "approved";
+          approvalSource = "host";
+        } else if (current() && options.approve) {
+          // Separate copies prevent a callback from changing the reviewed subject.
+          allowed = (await waitForHost(() => options.approve!(review(), s.signal), s.signal)) === true;
+          approvalSource = "prompt";
+        }
       }
     }
-    if (!s.current() || hashAction(input) !== subjectId) allowed = false;
+    if (!current()) allowed = false;
     event(
       flow,
       "applied",
@@ -156,8 +191,9 @@ export function createPluginSession(reflexes: Reflexes, options: PluginSessionOp
       undefined,
       subjectId,
       s.revision,
+      approvalSource,
     );
-    return { allowed, decision, subjectId };
+    return { allowed, decision, subjectId, approvalSource };
   }
   return {
     sessionId,
@@ -233,7 +269,8 @@ export function createPluginSession(reflexes: Reflexes, options: PluginSessionOp
       if (!s.current() || hashAction(input) !== originalHash) throw new Error("message changed during preparation");
       return { ...reviewed, recommendation, revision: s.revision, isCurrent: s.current };
     },
-    reviewAction: (input: GateInput, signal?: AbortSignal) => gate("gate", input, signal),
+    reviewAction: (input: GateInput, signal?: AbortSignal, resolveApproval?: ActionApprovalResolver) =>
+      gate("gate", input, signal, resolveApproval),
     async checkpoint(input: PulseInput, signal?: AbortSignal): Promise<PulseDecision | undefined> {
       if (modes.pulse === "off") return undefined;
       const decision = await judge(

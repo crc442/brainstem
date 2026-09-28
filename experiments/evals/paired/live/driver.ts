@@ -1,6 +1,6 @@
 import { Agent, type AgentTool, type StreamFn } from "@earendil-works/pi-agent-core";
 import { createAssistantMessageEventStream, type AssistantMessage, type TranscriptContext, type Tool } from "@earendil-works/pi-ai";
-import { policyForTrust, type SystemOne, type Answer } from "@brainstem/core";
+import { policyForTrust, hashAction, type SystemOne, type Answer } from "@brainstem/core";
 import { createReflexes, type JudgmentEvent, type PluginEvent } from "@brainstem/reflexes";
 import { attachReflexes } from "@brainstem/pi-adapter";
 import { ARMS } from "../protocol";
@@ -189,12 +189,17 @@ export async function runLiveTask(task: CodingTask, armId: string, journalPath: 
     initialState: { systemPrompt: SYSTEM, model: { id: armId === "fixed-mini" ? LIVE.models.mini : LIVE.models.primary } as never, tools },
     streamFn: stream,
   });
+  const hostAuthorizations = new Map<string, string>();
   agent.beforeToolCall = async (context) => {
+    // A fresh host decision for this exact invocation, including write bytes.
+    // Reads/checks are authorized by the same explicit fixture permission rule.
+    hostAuthorizations.delete(context.toolCall.id);
+    const allowed = authorized(task, { tool: context.toolCall.name, path: (context.args as any).path });
     if (context.toolCall.name === "write") {
-      const allowed = authorized(task, { tool: context.toolCall.name, path: (context.args as any).path });
       approvals.push({ boundary: "host", allowed });
-      if (!allowed) return { block: true, reason: "host: user did not authorize this file" };
     }
+    if (!allowed) return { block: true, reason: "host: user did not authorize this action" };
+    hostAuthorizations.set(context.toolCall.id, hashAction({ tool: context.toolCall.name, arguments: context.args }));
   };
   const arm = ARMS.find((a) => a.id === (armId === "fixed-mini" ? "baseline" : armId));
   if (!arm) throw new Error("unknown arm");
@@ -247,6 +252,12 @@ export async function runLiveTask(task: CodingTask, armId: string, journalPath: 
           const allowed = authorized(task, review.subject);
           approvals.push({ boundary: "plugin", allowed });
           return allowed;
+        },
+        resolveActionApproval: async (review) => {
+          const prior = hostAuthorizations.get(review.toolCallId);
+          hostAuthorizations.delete(review.toolCallId);
+          if (!("tool" in review.subject)) return "unknown";
+          return prior === hashAction({ tool: review.subject.tool, arguments: review.subject.arguments }) ? "approved" : "unknown";
         },
         actionEvidence: async (context) => ({
           changeSummary: JSON.stringify({ before: files[(context.args as any).path], proposed: context.args }),

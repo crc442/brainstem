@@ -1,11 +1,11 @@
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 import { Agent, type AgentTool, type StreamFn } from "@earendil-works/pi-agent-core";
 import { createAssistantMessageEventStream, type AssistantMessage } from "@earendil-works/pi-ai";
 import { createReflexes } from "@brainstem/reflexes";
-import { mockSystemOne, choiceAnswer, noulAnswer, scoreAnswer, type Answer, type CapabilityDescriptor } from "@brainstem/core";
+import { mockSystemOne, choiceAnswer, noulAnswer, scoreAnswer, hashAction, type Answer, type CapabilityDescriptor } from "@brainstem/core";
 import { attachReflexes } from "../src";
 import { createHarness } from "../../cli/src/harness";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -167,6 +167,182 @@ function providerAnswers(): Record<string, Answer> {
     disposition: choiceAnswer("auto_run", 1),
   };
 }
+
+for (const adapter of ["cli", "pi"] as const) {
+  test(`${adapter}: one approval per write, and changed writes require a fresh approval`, async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "brainstem-approval-contract-"));
+    const approved: string[] = [];
+    const duplicatePrompt = vi.fn(async () => true);
+    const judge = mockSystemOne(() => ({ ...providerAnswers(), disposition: choiceAnswer("ask_user", 0.99) }));
+    const script = ["first", "changed"].map((content, i) =>
+      message([{ type: "toolCall", id: `w${i}`, name: "write", arguments: { path: "note.txt", content } }], "toolUse"),
+    );
+    script.push(done);
+    let dispose = () => {};
+    try {
+      let prompt: (text: string) => Promise<void>;
+      if (adapter === "cli") {
+        const harness = createHarness({
+          cwd,
+          trust: 0.3,
+          journalPath: join(cwd, "journal.ndjson"),
+          model: undefined as never,
+          streamFn: scripted(script, []),
+          systemOne: judge,
+          reflexModes: { select: "off", sanitize: "off", verify: "off", pulse: "off" },
+          approvalHandler: async (request) => {
+            approved.push((request.validatedArgs as { content: string }).content);
+            return "approve_once";
+          },
+        });
+        prompt = (text) => harness.prompt(text);
+        dispose = () => harness.endSession();
+      } else {
+        const hostApprovals = new Map<string, string>();
+        const agent = new Agent({
+          streamFn: scripted(script, []),
+          initialState: {
+            tools: [
+              {
+                ...tool("write", "written"),
+                execute: async (_id, args) => {
+                  const value = args as { path: string; content: string };
+                  writeFileSync(join(cwd, value.path), value.content);
+                  return { content: [{ type: "text", text: "written" }], details: {} };
+                },
+              },
+            ],
+          },
+          beforeToolCall: async (context) => {
+            approved.push((context.args as { content: string }).content);
+            hostApprovals.set(context.toolCall.id, hashAction(context.args));
+          },
+        });
+        const handle = attachReflexes(agent, createReflexes({ judge, root: cwd }), {
+          cwd,
+          modes: { sanitize: "off", verify: "off" },
+          approve: duplicatePrompt,
+          resolveActionApproval: async (review) => {
+            const prior = hostApprovals.get(review.toolCallId);
+            hostApprovals.delete(review.toolCallId);
+            return prior === hashAction((review.subject as { arguments: unknown }).arguments) ? "approved" : "unknown";
+          },
+        });
+        prompt = (text) => handle.prompt(text);
+        dispose = () => handle.dispose();
+      }
+      await prompt("Write first then changed to note.txt.");
+      expect(approved).toEqual(["first", "changed"]);
+      expect(readFileSync(join(cwd, "note.txt"), "utf8")).toBe("changed");
+      expect(duplicatePrompt).not.toHaveBeenCalled();
+    } finally {
+      dispose();
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+}
+
+test("a nonblocking host hook is not implicit approval", async () => {
+  const approve = vi.fn(async () => true);
+  const agent = new Agent({ streamFn: scripted([done], []), beforeToolCall: async () => undefined });
+  const plugin = attachReflexes(
+    agent,
+    createReflexes({ judge: mockSystemOne(() => ({ ...providerAnswers(), disposition: choiceAnswer("ask_user", 0.99) })) }),
+    {
+      cwd: "/tmp",
+      approve,
+    },
+  );
+  const args = { command: "echo hi" };
+  expect((await agent.beforeToolCall!({ toolCall: { id: "b", name: "bash", arguments: args }, args } as never))?.block).not.toBe(true);
+  expect(approve).toHaveBeenCalledTimes(1);
+  plugin.dispose();
+});
+
+test.each(["host", "lookup"] as const)("argument mutation during %s invalidates authorization before another prompt", async (phase) => {
+  const args = { path: "note.txt", content: "before" };
+  const approve = vi.fn(async () => true);
+  const agent = new Agent({
+    streamFn: scripted([done], []),
+    beforeToolCall: async () => {
+      if (phase === "host") args.content = "changed";
+    },
+  });
+  const resolver = vi.fn(async () => {
+    if (phase === "lookup") args.content = "changed";
+    return "unknown" as const;
+  });
+  const plugin = attachReflexes(
+    agent,
+    createReflexes({ judge: mockSystemOne(() => ({ ...providerAnswers(), disposition: choiceAnswer("ask_user", 0.99) })) }),
+    {
+      cwd: "/tmp",
+      approve,
+      resolveActionApproval: resolver,
+    },
+  );
+  const result = await agent.beforeToolCall!({ toolCall: { id: "w", name: "write", arguments: args }, args } as never);
+  expect(result?.block).toBe(true);
+  expect(approve).not.toHaveBeenCalled();
+  expect(resolver).toHaveBeenCalledTimes(phase === "host" ? 0 : 1);
+  plugin.dispose();
+});
+
+test("host denial remains authoritative even with an approval resolver", async () => {
+  const resolver = vi.fn(async () => "approved" as const);
+  const judge = provider();
+  const agent = new Agent({ streamFn: scripted([done], []), beforeToolCall: async () => ({ block: true, reason: "host denied" }) });
+  const plugin = attachReflexes(agent, createReflexes({ judge }), { cwd: "/tmp", resolveActionApproval: resolver });
+  const args = { command: "echo hi" };
+  expect(await agent.beforeToolCall!({ toolCall: { id: "b", name: "bash", arguments: args }, args } as never)).toEqual({
+    block: true,
+    reason: "host denied",
+  });
+  expect(resolver).not.toHaveBeenCalled();
+  expect(judge.calls).toHaveLength(0);
+  plugin.dispose();
+});
+
+test("cancellation stops waiting for an uncooperative host hook", async () => {
+  const agent = new Agent({ streamFn: scripted([done], []), beforeToolCall: () => new Promise(() => {}) });
+  const plugin = attachReflexes(agent, createReflexes({ judge: provider() }), { cwd: "/tmp" });
+  const args = { command: "echo hi" };
+  const controller = new AbortController();
+  const pending = agent.beforeToolCall!({ toolCall: { id: "b", name: "bash", arguments: args }, args } as never, controller.signal);
+  controller.abort();
+  await expect(pending).rejects.toThrow(/cancel/);
+  plugin.dispose();
+});
+
+test("concurrent identical actions keep invocation-specific host authorization", async () => {
+  const seen: string[] = [];
+  const approve = vi.fn(async () => false);
+  const agent = new Agent({ streamFn: scripted([done], []), beforeToolCall: async () => undefined });
+  const plugin = attachReflexes(
+    agent,
+    createReflexes({ judge: mockSystemOne(() => ({ ...providerAnswers(), disposition: choiceAnswer("ask_user", 0.99) })) }),
+    {
+      cwd: "/tmp",
+      approve,
+      resolveActionApproval: async (review) => {
+        seen.push(review.toolCallId);
+        await Promise.resolve();
+        return review.toolCallId === "approved" ? "approved" : "unknown";
+      },
+    },
+  );
+  const results = await Promise.all(
+    ["approved", "other"].map((id) => {
+      const args = { command: "echo hi" };
+      return agent.beforeToolCall!({ toolCall: { id, name: "bash", arguments: args }, args } as never);
+    }),
+  );
+  expect(results[0]?.block).not.toBe(true);
+  expect(results[1]?.block).toBe(true);
+  expect(seen.sort()).toEqual(["approved", "other"]);
+  expect(approve).toHaveBeenCalledTimes(1);
+  plugin.dispose();
+});
 
 test("Pulse can stop at the host checkpoint without dispatching another request", async () => {
   const seen: { model: string; context: any }[] = [];

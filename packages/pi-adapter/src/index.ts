@@ -9,12 +9,19 @@ import {
   type CapabilityRecommendation,
   type CapturedOutput,
   type MessageGateInput,
+  type GateReview,
+  type ExistingActionApproval,
 } from "@brainstem/reflexes";
 
 const DEFAULT_CAPTURED_TOOLS = new Set(["bash", "read", "write", "grep", "glob", "read_output", "search_output"]);
 export interface AttachReflexesOptions extends PluginSessionOptions {
   cwd: string;
   capturedTools?: Set<string>;
+  /** Reuse host authorization for this exact invocation when Gate asks.
+   * Return unknown to use approve(); denied never opens a second prompt.
+   * Host denials and Gate denials remain authoritative.
+   */
+  resolveActionApproval?: (review: GateReview & { toolCallId: string }, signal: AbortSignal) => Promise<ExistingActionApproval>;
   taskText?: () => string;
   recentActivity?: () => string[];
   /** Compatibility option. Prefer modes.focus; selection without recovery remains opt-in. */
@@ -73,12 +80,19 @@ export function attachReflexes(agent: Agent, reflexes: Reflexes, options: Attach
 
   const originalBefore = agent.beforeToolCall;
   const before: NonNullable<Agent["beforeToolCall"]> = async (context, signal) => {
-    const originalResult = await originalBefore?.(context, signal);
-    if (disposed || originalResult?.block || !capturedTools.has(context.toolCall.name)) return originalResult;
+    if (disposed || !capturedTools.has(context.toolCall.name)) return originalBefore?.(context, signal);
     const scope = session.scope(signal);
     if (!scope.current()) return { block: true, reason: "[brainstem] action cancelled" };
-    const identity = JSON.stringify({ name: context.toolCall.name, args: context.args });
+    const identityOf = () => JSON.stringify({ toolCall: context.toolCall, args: context.args });
+    const identity = identityOf();
+    const toolCallId = context.toolCall.id;
     const snapshot = structuredClone(context.args ?? {}) as { command?: string; path?: string };
+    // Snapshot before the host's asynchronous approval too. Otherwise changed
+    // arguments could be mistaken for the action the host already approved.
+    const originalResult = originalBefore ? await waitForHost(() => originalBefore(context, scope.signal), scope.signal) : undefined;
+    if (originalResult?.block) return originalResult;
+    if (!scope.current() || identity !== identityOf())
+      return { block: true, reason: "[brainstem] action changed or cancelled during host review" };
     let evidence: { changeSummary?: string; evidenceIncomplete?: boolean } = {};
     if (session.modes.gate !== "off" && options.actionEvidence) {
       // Give the callback an independent argument snapshot.
@@ -100,14 +114,21 @@ export function attachReflexes(agent: Agent, reflexes: Reflexes, options: Attach
           evidence.evidenceIncomplete || summary?.truncated || (context.toolCall.name === "write" && evidence.changeSummary === undefined),
       },
       scope.signal,
+      options.resolveActionApproval
+        ? async (review, approvalSignal) => {
+            if (!scope.current() || identity !== identityOf()) return "denied";
+            const resolution = await options.resolveActionApproval!({ ...review, toolCallId }, approvalSignal);
+            return scope.current() && identity === identityOf() ? resolution : "denied";
+          }
+        : undefined,
     );
     if (reviewed.decision) report("gate", reviewed.decision.action, reviewed.decision.reasons);
-    if (!scope.current() || identity !== JSON.stringify({ name: context.toolCall.name, args: context.args }))
+    if (!scope.current() || identity !== identityOf())
       return { block: true, reason: "[brainstem] action changed or cancelled since review" };
     if (!reviewed.allowed)
       return {
         block: true,
-        reason: `[brainstem] ${reviewed.decision?.action === "deny" ? "denied" : "needs approval"}: ${reviewed.decision?.reasons.join("; ") ?? "unresolved"}`,
+        reason: `[brainstem] ${reviewed.approvalSource === "host" ? "host authorization denied" : reviewed.decision?.action === "deny" ? "denied" : "needs approval"}: ${reviewed.decision?.reasons.join("; ") ?? "unresolved"}`,
       };
     return originalResult;
   };
