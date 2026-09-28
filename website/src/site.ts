@@ -1,4 +1,3 @@
-// TODO: replace with the public repository URL once it is published.
-export const githubUrl = "#";
+export const githubUrl = "https://github.com/crc442/brainstem";
 
 export const installCommand = "bun add @brainstem/reflexes @brainstem/pi-adapter";

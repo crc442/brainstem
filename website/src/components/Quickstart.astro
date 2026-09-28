@@ -4,7 +4,7 @@ import { installCommand } from "../site";
 const modes = [
   { name: "off", behavior: "Reflex does not run." },
   { name: "shadow", behavior: "Judges and logs. Changes nothing.", isRecommended: true },
-  { name: "active", behavior: "Verdict applies: block, strip, trim, route." },
+  { name: "active", behavior: "Verdict applies: block, withhold, trim, route." },
 ];
 
 const owners = [
@@ -33,6 +33,7 @@ const owners = [
 const reflexes = createReflexes(&#123; judge, root: cwd &#125;)
 
 const plugin = attachReflexes(agent, reflexes, &#123;
+  cwd,
   modes: &#123; gate: <span class="string">'shadow'</span>, sanitize: <span class="string">'shadow'</span>, focus: <span class="string">'shadow'</span> &#125;,
 &#125;)
 

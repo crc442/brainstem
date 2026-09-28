@@ -118,7 +118,7 @@ export function mountSessionReplay(root: HTMLElement): void {
     await wait(700); if (!isCurrentRun()) return;
     injectedRow.classList.add("flagged");
     addTag(injectedRow, "alert", "BLOCKED", "agent directive · 0.94");
-    injectedRow.after(createElement("div", "note", "<b>sanitize</b> tries to override instructions · requests a dangerous action. The assistant never saw this line."));
+    injectedRow.after(createElement("div", "note", "<b>sanitize</b> tries to override instructions · requests a dangerous action. The assistant never saw this output."));
     scrollFeedToEnd();
     addSaved(54);
     await wait(1400); if (!isCurrentRun()) return;
