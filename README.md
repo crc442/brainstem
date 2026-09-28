@@ -12,7 +12,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT license"></a>
 </p>
 
-Brainstem gives your coding agent reflexes: fast judgments that sit between the agent and its tools. They pause risky actions, block injected instructions, and trim tool output to what the task needs, before the main model ever sees it. Your agent still runs everything.
+Brainstem gives your coding agent reflexes: fast judgments that sit between the agent and its tools. They pause risky actions before they run, and block injected instructions and trim tool output before the main model sees them. Your agent still runs everything.
 
 ## What it looks like
 
@@ -29,11 +29,12 @@ A scripted replay of a real session shape, with no live API calls; token counts 
 npm install @brainstem/reflexes @brainstem/pi-adapter
 ```
 
-| Package | Version | What it is |
+| Package | Version | Purpose |
 |---|---|---|
-| [`@brainstem/reflexes`](packages/reflexes) | [![npm](https://img.shields.io/npm/v/@brainstem/reflexes?label=)](https://www.npmjs.com/package/@brainstem/reflexes) | The reflexes API: `createReflexes`, `jevJudge` |
-| [`@brainstem/pi-adapter`](packages/pi-adapter) | [![npm](https://img.shields.io/npm/v/@brainstem/pi-adapter?label=)](https://www.npmjs.com/package/@brainstem/pi-adapter) | `attachReflexes` for Pi agents |
-| [`@brainstem/core`](packages/core) | [![npm](https://img.shields.io/npm/v/@brainstem/core?label=)](https://www.npmjs.com/package/@brainstem/core) | The engine both depend on; installed automatically |
+| [`@brainstem/reflexes`](packages/reflexes) | [![npm](https://img.shields.io/npm/v/@brainstem/reflexes?label=)](https://www.npmjs.com/package/@brainstem/reflexes) | Judgment API (`createReflexes`, `jevJudge`); bring your own judge model |
+| [`@brainstem/pi-adapter`](packages/pi-adapter) | [![npm](https://img.shields.io/npm/v/@brainstem/pi-adapter?label=)](https://www.npmjs.com/package/@brainstem/pi-adapter) | Wires reflexes into a Pi agent (`attachReflexes`) |
+| [`@brainstem/core`](packages/core) | [![npm](https://img.shields.io/npm/v/@brainstem/core?label=)](https://www.npmjs.com/package/@brainstem/core) | Low-level engine, policy, and journal; installed automatically |
+| [`@brainstem/cli`](packages/cli) | not published | Reference host demonstrating the integration (not a sandbox) |
 
 ## Quick start
 
@@ -71,15 +72,6 @@ Each reflex runs in `off`, `shadow` (judge and log, don't act), or `active` mode
 ## Trust dial
 
 `trust` (0–1) lowers the confidence bar for auto-running actions: `autoConfidence = 0.95 - 0.35 * trust` (see `packages/core/src/policy.ts`). `trust 0` does not mean "ask about everything". Safety thresholds such as deny lines and credential-access thresholds never change with trust.
-
-## Packages
-
-| Package | Purpose |
-|---|---|
-| [`@brainstem/reflexes`](packages/reflexes) | Judgment API; bring your own judge model |
-| [`@brainstem/pi-adapter`](packages/pi-adapter) | Wires reflexes into a Pi agent |
-| [`@brainstem/core`](packages/core) | Low-level engine, policy, and journal |
-| `@brainstem/cli` | Reference host demonstrating the integration (not a sandbox) |
 
 ## Try the reference CLI
 
