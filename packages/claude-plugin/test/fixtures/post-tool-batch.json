@@ -1,0 +1,27 @@
+{
+  "_source": "Task 0 follow-up probe (#11), Claude Code 2.1.277, 2026-09-29. PostToolBatch payload for a parallel batch of three Bash calls, two succeeding and one failing ('exit 5'). Fired once for the whole batch, timed to start only after the batch's own PostToolUse/PostToolUseFailure hooks (each artificially delayed) had completed. tool_calls carries every call's tool_name, tool_input, tool_use_id, and tool_response (a string for both success and failure). A parallel test of additionalContext + continue: false on this event confirmed both take effect: additionalContext appears in the transcript as a hook_additional_context attachment, and continue: false ends the session with terminal_reason 'hook_stopped' before the next assistant turn.",
+  "session_id": "8e5ec651-3d6c-4b68-8dee-35e897afecd5",
+  "cwd": "/private/tmp/bs-probe-project-2",
+  "permission_mode": "default",
+  "hook_event_name": "PostToolBatch",
+  "tool_calls": [
+    {
+      "tool_name": "Bash",
+      "tool_input": { "command": "echo parallel-a", "description": "Print parallel-a" },
+      "tool_use_id": "toolu_bdrk_011248Q9oACKXSBxweWKaZEj",
+      "tool_response": "parallel-a"
+    },
+    {
+      "tool_name": "Bash",
+      "tool_input": { "command": "echo parallel-b", "description": "Print parallel-b" },
+      "tool_use_id": "toolu_bdrk_018Ecapo1P6QuSJmR8TJiGc7",
+      "tool_response": "parallel-b"
+    },
+    {
+      "tool_name": "Bash",
+      "tool_input": { "command": "exit 5", "description": "Exit with status code 5" },
+      "tool_use_id": "toolu_bdrk_013mWuaLoLZYF3wQGfsPBMBE",
+      "tool_response": "Exit code 5"
+    }
+  ]
+}

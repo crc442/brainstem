@@ -1,0 +1,13 @@
+{
+  "_source": "Task 0 follow-up probe (#10), Claude Code 2.1.277, 2026-09-29. PostToolUseFailure payload for a wrapped call: a PreToolUse hook returned permissionDecision: allow plus updatedInput rewriting the command to 'exit 7'. tool_input carries the REWRITTEN command, tool_use_id matches the PreToolUse event for the same call, error is 'Exit code N', and is_interrupt is false. A plain (non-wrapped) non-zero exit and a tool-timeout kill produced the same shape, differing only in tool_input and error (e.g. 'Exit code 143\\nCommand timed out after 1s' for a timeout kill).",
+  "session_id": "f2df9196-4553-45b6-9418-6e332631453c",
+  "cwd": "/private/tmp/bs-probe-project-2",
+  "permission_mode": "default",
+  "hook_event_name": "PostToolUseFailure",
+  "tool_name": "Bash",
+  "tool_input": { "command": "exit 7" },
+  "tool_use_id": "toolu_bdrk_01Y6qZ1xdsq58KzTDWsGWmMb",
+  "error": "Exit code 7",
+  "is_interrupt": false,
+  "duration_ms": 75
+}
