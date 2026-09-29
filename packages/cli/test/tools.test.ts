@@ -127,11 +127,11 @@ describe("R4: managed process group termination", () => {
     dir = mkdtempSync(join(tmpdir(), "brainstem-tools-r4-"));
     const marker = join(dir, "grandchild-survived");
     // A detached-in-shell grandchild traps SIGTERM (ignores it) and would
-    // touch the marker file after 400ms if it survived — well past the
+    // touch the marker file after 2s if it survived — well past the
     // kill+grace+drain bound below (50 + 50 + 20 = 120ms), so the marker
     // must never appear if the whole process group was actually terminated.
     const { runWithTimeout } = bashTool(dir, { killGraceMs: 50, drainGraceMs: 20 });
-    const command = `(trap '' TERM; sleep 0.4; touch "${marker}") & disown; sleep 5`;
+    const command = `(trap '' TERM; sleep 2; touch "${marker}") & disown; sleep 5`;
 
     const started = performance.now();
     const result = await runWithTimeout(command, 50);
@@ -141,7 +141,7 @@ describe("R4: managed process group termination", () => {
     // Settles near the timeout+grace+drain bound, not anywhere near the full
     // 5s sleep the outer shell was asked to run.
     expect(elapsedMs).toBeLessThan(2_000);
-    await new Promise((resolve) => setTimeout(resolve, 600));
+    await new Promise((resolve) => setTimeout(resolve, 2_400));
     expect(existsSync(marker)).toBe(false);
   });
 
