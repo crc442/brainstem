@@ -1,6 +1,7 @@
 import { staticVerdict } from "@brainstem/core";
 import type { PluginSession, Reflexes } from "@brainstem/reflexes";
 import type { PluginConfig } from "../config";
+import { loadPermissionRules, shouldJudge } from "../prefilter";
 import { INTERACTIVE_TOOLS, toGateInput } from "../tools";
 import type { Request, Response, ReviewActionResponse } from "../protocol";
 
@@ -42,6 +43,9 @@ export async function handle(request: Request, state: DaemonState): Promise<Resp
       // A hook decision on an interactive tool, or in plan mode, could answer or skip
       // a prompt the user must see.
       if (modes.gate === "off" || request.permissionMode === "plan" || INTERACTIVE_TOOLS.has(request.tool)) return skip(state);
+
+      // Re-read per call: the files are small, and rules may change mid-session.
+      if (!shouldJudge(request.tool, request.input, loadPermissionRules(state.settingsFiles))) return skip(state);
 
       const gateInput = toGateInput(request.tool, request.input, request.task || state.task);
       const reviewed = await state.session.reviewAction(gateInput);
