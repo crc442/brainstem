@@ -43,7 +43,9 @@ export const buildConfigs: UserConfig[] = [
     cwd: "packages/claude-plugin",
     dts: false,
     name: "claude-plugin",
-    noExternal: [/.*/],
+    // A plugin is installed by copying its directory, with nothing npm-installed
+    // there, so every dependency must be inlined into the entries.
+    deps: { alwaysBundle: [/.*/] },
     entry: {
       "daemon/main": "src/daemon/main.ts",
     },
