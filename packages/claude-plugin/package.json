@@ -1,0 +1,25 @@
+{
+  "name": "@brainstem/claude-plugin",
+  "version": "0.1.0",
+  "type": "module",
+  "engines": {
+    "node": ">=20.3"
+  },
+  "files": [
+    "dist",
+    "hooks",
+    "commands",
+    ".claude-plugin"
+  ],
+  "bin": {
+    "brainstemd": "./dist/daemon/main.mjs",
+    "brainstem-output": "./dist/output/filter.mjs"
+  },
+  "scripts": {
+    "prepack": "../../node_modules/.bin/tsdown --config ../../tsdown.config.ts --filter claude-plugin"
+  },
+  "dependencies": {
+    "@brainstem/core": "workspace:*",
+    "@brainstem/reflexes": "workspace:*"
+  }
+}
