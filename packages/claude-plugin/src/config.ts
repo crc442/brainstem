@@ -23,7 +23,7 @@ export interface PluginConfig {
   environment: string[];
   trust: number;
   classifyAllShell: boolean;
-  modes: PluginModes;
+  modes: Required<PluginModes>;
   journalPath?: string;
 }
 
@@ -46,7 +46,7 @@ export const DEFAULT_RULES = {
   environment: ["A git repository in the current working directory."],
 } as const;
 
-const DEFAULT_MODES: PluginModes = {
+const DEFAULT_MODES: Required<PluginModes> = {
   gate: "active",
   sanitize: "active",
   verify: "active",
@@ -79,7 +79,7 @@ export function resolveConfig(raw: RawConfig): PluginConfig {
   const trust = raw.trust ?? 0.3;
   if (!(trust >= 0 && trust <= 1)) throw new Error(`trust must be between 0 and 1, got ${trust}`);
 
-  const modes = { ...DEFAULT_MODES, ...raw.modes } as PluginModes;
+  const modes = { ...DEFAULT_MODES, ...raw.modes };
   for (const [flow, mode] of Object.entries(modes)) {
     if (!MODES.includes(mode as ReflexMode)) throw new Error(`invalid mode "${mode}" for ${flow}`);
   }

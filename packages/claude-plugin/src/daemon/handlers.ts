@@ -30,9 +30,7 @@ const skip = (state: DaemonState, reasons: string[] = []): ReviewActionResponse 
   kind: "reviewAction",
   action: "skip",
   reasons,
-  // PluginModes (from @brainstem/core) types every flow as optional, but resolveConfig
-  // always fills every flow from DEFAULT_MODES; the fallback exists only for the type.
-  mode: state.config.modes.gate ?? "off",
+  mode: state.config.modes.gate,
 });
 
 export async function handle(request: Request, state: DaemonState): Promise<Response> {
@@ -60,7 +58,7 @@ export async function handle(request: Request, state: DaemonState): Promise<Resp
         kind: "reviewAction",
         action: decision === "ask" && !mustPrompt ? "skip" : decision,
         reasons: reviewed.decision?.reasons ?? [],
-        mode: modes.gate ?? "off",
+        mode: modes.gate,
       };
     }
     case "prepareMessage": {
