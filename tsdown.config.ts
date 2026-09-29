@@ -48,6 +48,9 @@ export const buildConfigs: UserConfig[] = [
     deps: { alwaysBundle: [/.*/] },
     entry: {
       "daemon/main": "src/daemon/main.ts",
+      "hook/session-start": "src/hook/session-start.ts",
+      "hook/session-end": "src/hook/session-end.ts",
+      "hook/pre-tool-use": "src/hook/pre-tool-use.ts",
     },
   },
 ];

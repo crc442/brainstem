@@ -1,0 +1,29 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "*",
+        "hooks": [{ "type": "command", "command": "node \"$CLAUDE_PLUGIN_ROOT/dist/hook/session-start.mjs\"", "timeout": 15 }]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PLUGIN_ROOT/dist/hook/pre-tool-use.mjs\"",
+            "timeout": 20,
+            "statusMessage": "brainstem reviewing action..."
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "matcher": "*",
+        "hooks": [{ "type": "command", "command": "node \"$CLAUDE_PLUGIN_ROOT/dist/hook/session-end.mjs\"", "timeout": 10 }]
+      }
+    ]
+  }
+}
