@@ -1,11 +1,17 @@
 import { createServer, type Server } from "node:net";
 import { unlinkSync } from "node:fs";
+import { homedir } from "node:os";
+import { parseArgs } from "node:util";
 // policyForTrust lives in @brainstem/core; @brainstem/reflexes consumes it but does not re-export it.
 import { policyForTrust } from "@brainstem/core";
 import { createReflexes, createPluginSession, type SystemOne } from "@brainstem/reflexes";
 import { handle, type DaemonState } from "./handlers";
 import { composeEnvironment } from "../environment";
-import { distPath } from "../hook/io";
+import { distPath, runIfEntry } from "../hook/io";
+import { requestOrDefer } from "../hook/client";
+import { loadRawConfig, resolveConfig } from "../config";
+import { buildJudge, selectJudge } from "../judge";
+import { settingsFiles } from "../prefilter";
 import type { PluginConfig } from "../config";
 import type { Request } from "../protocol";
 
@@ -101,3 +107,48 @@ export async function createDaemon(options: DaemonOptions): Promise<{ close(): P
 
   return { close };
 }
+
+const JUDGE_BACKED_MODES = {
+  sanitize: "off",
+  verify: "off",
+  focus: "off",
+  select: "off",
+  pulse: "off",
+  steer: "off",
+  messageGate: "off",
+} as const;
+
+async function startFromCli(argv: string[]): Promise<void> {
+  const { values } = parseArgs({ args: argv, options: { socket: { type: "string" }, "print-config": { type: "boolean" } } });
+  const projectDir = process.env.CLAUDE_PROJECT_DIR ?? process.cwd();
+  const { raw, ignored } = loadRawConfig({ home: homedir(), projectDir });
+  const selection = selectJudge(process.env);
+  const config = resolveConfig(selection.kind === "unavailable" ? { ...raw, modes: { ...raw.modes, ...JUDGE_BACKED_MODES } } : raw);
+
+  if (values["print-config"]) {
+    process.stdout.write(`${JSON.stringify({ config, judge: selection, ignored }, null, 2)}\n`);
+    return;
+  }
+  if (!values.socket) throw new Error("brainstemd requires --socket <path>");
+  for (const entry of ignored) process.stderr.write(`brainstem: ignored project-scoped key ${entry}\n`);
+  if (selection.kind !== "jev") process.stderr.write(`brainstem: ${selection.note}\n`);
+
+  const options = {
+    socket: values.socket,
+    judge: await buildJudge(selection),
+    config,
+    root: projectDir,
+    settingsFiles: settingsFiles(homedir(), projectDir),
+  };
+  try {
+    await createDaemon(options);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EADDRINUSE") throw error;
+    // Either a live daemon already serves this session, or a crash left the file
+    // behind. requestOrDefer unlinks a file nothing listens on, so one retry binds.
+    if (await requestOrDefer(values.socket, { kind: "ping" }, 1_000)) return;
+    await createDaemon(options);
+  }
+}
+
+runIfEntry(import.meta.url, () => startFromCli(process.argv.slice(2)));

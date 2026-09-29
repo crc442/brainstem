@@ -38,6 +38,16 @@ export const buildConfigs: UserConfig[] = [
     entry: "src/main.ts",
     name: "cli",
   },
+  {
+    ...library,
+    cwd: "packages/claude-plugin",
+    dts: false,
+    name: "claude-plugin",
+    noExternal: [/.*/],
+    entry: {
+      "daemon/main": "src/daemon/main.ts",
+    },
+  },
 ];
 
 export default defineConfig(buildConfigs);
