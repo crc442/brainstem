@@ -5,14 +5,13 @@ import { homedir } from "node:os";
 import { parseArgs } from "node:util";
 // policyForTrust lives in @brainstem/core; @brainstem/reflexes consumes it but does not re-export it.
 import { policyForTrust } from "@brainstem/core";
-import { createReflexes, createPluginSession, type SystemOne } from "@brainstem/reflexes";
+import { createReflexes, createPluginSession, REVIEW_CHAR_CAP, type SystemOne } from "@brainstem/reflexes";
 import { handle, type DaemonState } from "./handlers";
 import { composeEnvironment } from "../environment";
 import { distPath, runIfEntry } from "../hook/io";
 import { requestOrDefer } from "../hook/client";
 import { loadRawConfig, resolveConfig } from "../config";
 import { buildJudge, selectJudge } from "../judge";
-import { settingsFiles } from "../prefilter";
 import type { PluginConfig } from "../config";
 import type { Request } from "../protocol";
 
@@ -25,15 +24,20 @@ export interface DaemonOptions {
   judge: SystemOne;
   config: PluginConfig;
   root: string;
-  settingsFiles?: string[];
   filterPath?: string;
 }
 
 export async function createDaemon(options: DaemonOptions): Promise<{ close(): Promise<void> }> {
+  const environment = composeEnvironment(options.config);
+  if (!environment.complete) {
+    process.stderr.write(
+      `brainstem: policy evidence exceeds the ${REVIEW_CHAR_CAP}-character review limit (${environment.totalChars} characters); shorten the policy\n`,
+    );
+  }
   const reflexes = createReflexes({
     judge: options.judge,
     root: options.root,
-    environment: composeEnvironment(options.config),
+    environment: environment.text,
     policy: policyForTrust(options.config.trust),
     journalPath: options.config.journalPath,
   });
@@ -46,7 +50,8 @@ export async function createDaemon(options: DaemonOptions): Promise<{ close(): P
     config: options.config,
     root: options.root,
     socket: options.socket,
-    settingsFiles: options.settingsFiles ?? [],
+    environmentComplete: environment.complete,
+    environmentTotalChars: environment.totalChars,
     filterPath: options.filterPath ?? distPath("output/filter.mjs"),
     task: "unspecified",
     toolTurns: 0,
@@ -139,7 +144,6 @@ async function startFromCli(argv: string[]): Promise<void> {
     judge: await buildJudge(selection),
     config,
     root: projectDir,
-    settingsFiles: settingsFiles(homedir(), projectDir),
   };
   try {
     await createDaemon(options);

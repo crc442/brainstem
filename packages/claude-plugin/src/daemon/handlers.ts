@@ -1,7 +1,6 @@
 import { staticVerdict } from "@brainstem/core";
-import type { PluginSession, Reflexes } from "@brainstem/reflexes";
+import { REVIEW_CHAR_CAP, type PluginSession, type Reflexes } from "@brainstem/reflexes";
 import type { PluginConfig } from "../config";
-import { loadPermissionRules, shouldJudge } from "../prefilter";
 import { INTERACTIVE_TOOLS, toGateInput } from "../tools";
 import type { Request, Response, ReviewActionResponse } from "../protocol";
 
@@ -11,8 +10,8 @@ export interface DaemonState {
   config: PluginConfig;
   root: string;
   socket: string;
-  /** Claude Code settings files whose deny/ask rules the prefilter reads (Task 8a). */
-  settingsFiles: string[];
+  environmentComplete: boolean;
+  environmentTotalChars: number;
   /** The bundled brainstem-output entry the wrapper runs (Task 14). */
   filterPath: string;
   task: string;
@@ -42,10 +41,16 @@ export async function handle(request: Request, state: DaemonState): Promise<Resp
       const { modes, classifyAllShell } = state.config;
       // A hook decision on an interactive tool, or in plan mode, could answer or skip
       // a prompt the user must see.
-      if (modes.gate === "off" || request.permissionMode === "plan" || INTERACTIVE_TOOLS.has(request.tool)) return skip(state);
+      if (modes.gate === "off") return skip(state);
+      if (request.permissionMode === "plan" || INTERACTIVE_TOOLS.has(request.tool)) return skip(state);
 
-      // Re-read per call: the files are small, and rules may change mid-session.
-      if (!shouldJudge(request.tool, request.input, loadPermissionRules(state.settingsFiles))) return skip(state);
+      if (!state.environmentComplete) {
+        const reason = `policy evidence exceeds the ${REVIEW_CHAR_CAP}-character review limit (${state.environmentTotalChars} characters); shorten the policy before using active Gate`;
+        if (modes.gate === "active") {
+          return { kind: "reviewAction", action: "deny", reasons: [reason], mode: modes.gate };
+        }
+        return skip(state, [reason]);
+      }
 
       const gateInput = toGateInput(request.tool, request.input, request.task || state.task);
       const reviewed = await state.session.reviewAction(gateInput);

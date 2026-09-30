@@ -9,9 +9,16 @@ const SECTIONS: { key: keyof Pick<PluginConfig, "environment" | "allow" | "soft_
   { key: "hard_deny", header: "HARD BLOCK (never cleared by user intent):" },
 ];
 
-export function composeEnvironment(config: PluginConfig): string {
+export interface ComposedEnvironment {
+  text: string;
+  complete: boolean;
+  totalChars: number;
+}
+
+export function composeEnvironment(config: PluginConfig): ComposedEnvironment {
   const blocks = SECTIONS.filter(({ key }) => config[key].length > 0).map(
     ({ key, header }) => `${header}\n${config[key].map((rule) => `- ${rule}`).join("\n")}`,
   );
-  return boundForReview(blocks.join("\n\n"), REVIEW_CHAR_CAP).text;
+  const bounded = boundForReview(blocks.join("\n\n"), REVIEW_CHAR_CAP);
+  return { text: bounded.text, complete: !bounded.truncated, totalChars: bounded.totalChars };
 }
