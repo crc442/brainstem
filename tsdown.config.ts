@@ -51,6 +51,7 @@ export const buildConfigs: UserConfig[] = [
       "hook/session-start": "src/hook/session-start.ts",
       "hook/session-end": "src/hook/session-end.ts",
       "hook/pre-tool-use": "src/hook/pre-tool-use.ts",
+      "output/filter": "src/output/filter.ts",
     },
   },
 ];

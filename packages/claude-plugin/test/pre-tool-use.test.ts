@@ -47,6 +47,15 @@ describe("renderPreToolUse", () => {
     expect(out.hookSpecificOutput!.permissionDecisionReason).toContain("output review");
   });
 
+  test("preserves every Bash input field while replacing command", () => {
+    const input = { command: "npm test", timeout: 420_000, description: "run suite", run_in_background: true };
+    const out = renderPreToolUse(
+      { kind: "reviewAction", action: "auto", reasons: [], mode: "active", wrap: { command: "node 'filter.mjs'" } },
+      input,
+    );
+    expect(out.hookSpecificOutput?.updatedInput).toEqual({ ...input, command: "node 'filter.mjs'" });
+  });
+
   test("a wrap accompanying ask is dropped, because a rewrite would be re-matched and denied", () => {
     const out = renderPreToolUse({ kind: "reviewAction", action: "ask", reasons: [], mode: "active", wrap: { command: "wrapped" } });
     expect(out.hookSpecificOutput!.permissionDecision).toBe("ask");

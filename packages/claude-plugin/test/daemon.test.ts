@@ -52,6 +52,33 @@ describe("daemon reviewAction", () => {
     expect(await request(socket, bash("ls"))).toMatchObject({ kind: "reviewAction", action: "auto", mode: "active" });
   });
 
+  test("wraps only active, auto-approved simple test and typecheck commands", async () => {
+    const { socket } = await start("auto_run");
+    for (const command of ["npm test", "bun run typecheck", "npx vitest run -t 'quotes; stay data'"]) {
+      expect(await request(socket, { ...bash(command), toolUseId: "tool use '☃'" })).toMatchObject({
+        action: "auto",
+        wrap: { command: expect.stringContaining("--command") },
+      });
+    }
+    for (const command of ["npm test:other", "npm test && echo x", "echo npm test"]) {
+      const response = await request(socket, { ...bash(command), toolUseId: "id" });
+      expect(response).toMatchObject({ action: "auto" });
+      expect(response).not.toHaveProperty("wrap");
+    }
+  });
+
+  test.each([
+    ["ask_user", {}],
+    ["auto_run", { modes: { gate: "shadow" } }],
+    ["auto_run", { modes: { gate: "off" } }],
+    ["auto_run", { modes: { sanitize: "shadow", verify: "shadow" } }],
+    ["auto_run", { modes: { sanitize: "off", verify: "off" } }],
+  ] as const)("does not rewrite when gate/output modes do not authorize review", async (disposition, raw) => {
+    const { socket } = await start(disposition, raw);
+    const response = await request(socket, { ...bash("npm test"), toolUseId: "id" });
+    expect(response).not.toHaveProperty("wrap");
+  });
+
   test("defers a judged ask to the harness's own rules and permission mode", async () => {
     const { socket } = await start("ask_user");
     const res = (await request(socket, bash("echo hi"))) as { action: string; reasons: string[] };
