@@ -1,0 +1,24 @@
+{
+  "_source": "Task 0 probe (#6), Claude Code 2.1.277, 2026-09-28. One SessionStart payload per observed 'source' value, from a fresh run, then '-c'/--continue, then a '/clear' prompt issued under -c. session_id is stable across startup and resume, but /clear issues a fresh one (a 'resume' SessionStart fires first, to process the /clear message in the old session, then a 'clear' SessionStart fires with the new id).",
+  "startup": {
+    "session_id": "d7ad9a3f-10e8-4a03-87a7-3fb59b474385",
+    "cwd": "/private/tmp/bs-probe-project",
+    "hook_event_name": "SessionStart",
+    "source": "startup"
+  },
+  "resume": {
+    "session_id": "d7ad9a3f-10e8-4a03-87a7-3fb59b474385",
+    "cwd": "/private/tmp/bs-probe-project",
+    "hook_event_name": "SessionStart",
+    "source": "resume",
+    "seconds_since_last_response": 5,
+    "context_tokens": 16029,
+    "prompt_cache_likely_expired": false
+  },
+  "clear": {
+    "session_id": "6b5125dc-bb5f-494a-8487-3718358f9a70",
+    "cwd": "/private/tmp/bs-probe-project",
+    "hook_event_name": "SessionStart",
+    "source": "clear"
+  }
+}

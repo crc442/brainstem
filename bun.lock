@@ -19,6 +19,18 @@
         "vitest": "^3.2.0",
       },
     },
+    "packages/claude-plugin": {
+      "name": "@brainstem/claude-plugin",
+      "version": "0.1.0",
+      "bin": {
+        "brainstemd": "./dist/daemon/main.mjs",
+        "brainstem-output": "./dist/output/filter.mjs",
+      },
+      "dependencies": {
+        "@brainstem/core": "workspace:*",
+        "@brainstem/reflexes": "workspace:*",
+      },
+    },
     "packages/cli": {
       "name": "@brainstem/cli",
       "version": "0.1.0",
@@ -59,7 +71,7 @@
       "name": "@brainstem/reflexes",
       "version": "0.3.0",
       "dependencies": {
-        "@brainstem/core": "workspace:*",
+        "@brainstem/core": "^0.2.1",
         "@typesafe-ai/sdk": "^0.6.0",
       },
     },

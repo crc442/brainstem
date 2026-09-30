@@ -1,0 +1,12 @@
+{
+  "_source": "Task 0 probe (#4), Claude Code 2.1.277, 2026-09-28. PostToolUse payload after a PreToolUse hook returned permissionDecision: allow plus updatedInput rewriting the command from 'echo Q4ORIGINAL' to 'echo Q4REWRITTEN'. Note tool_input carries the REWRITTEN command, and tool_use_id (toolu_bdrk_01UZDxwBX86TDpyxAdyigX5x) matches pre-tool-use-bash.json exactly, so a wrapped call is recognizable in PostToolUse.",
+  "session_id": "06f1f5a8-031b-4f1a-81d6-22e00e370a3f",
+  "cwd": "/private/tmp/bs-probe-project",
+  "permission_mode": "default",
+  "hook_event_name": "PostToolUse",
+  "tool_name": "Bash",
+  "tool_input": { "command": "echo Q4REWRITTEN", "description": "Echo a test string" },
+  "tool_response": { "stdout": "Q4REWRITTEN", "stderr": "", "interrupted": false, "isImage": false, "noOutputExpected": false },
+  "tool_use_id": "toolu_bdrk_01UZDxwBX86TDpyxAdyigX5x",
+  "duration_ms": 57
+}

@@ -1,0 +1,6 @@
+{
+  "allowManagedPermissionRulesOnly": true,
+  "permissions": {
+    "allow": ["Bash"]
+  }
+}

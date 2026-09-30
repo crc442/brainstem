@@ -81,6 +81,8 @@ export interface ReflexesOptions {
   cache?: AnswerCache;
   /** Default: process.cwd(). Used by Gate's static floor path checks. */
   root?: string;
+  /** Gate/Sanitize evidence describing this project. Default: the engine's generic git-repository sentence. */
+  environment?: string;
   /**
    * Shallow-merged over policyForTrust(0.3)'s defaults — top-level keys only.
    * Overriding one field of a sub-object (e.g. policy.gate.autoConfidence)
@@ -169,6 +171,7 @@ export function createReflexes(options: ReflexesOptions): Reflexes {
     journal,
     policy,
     root: options.root ?? process.cwd(),
+    environment: options.environment,
     makeId: () => newId("j"),
     ids: () => ({ sessionId }),
   });

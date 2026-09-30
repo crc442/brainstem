@@ -38,6 +38,21 @@ export const buildConfigs: UserConfig[] = [
     entry: "src/main.ts",
     name: "cli",
   },
+  {
+    ...library,
+    cwd: "packages/claude-plugin",
+    dts: false,
+    name: "claude-plugin",
+    // A plugin is installed by copying its directory, with nothing npm-installed
+    // there, so every dependency must be inlined into the entries.
+    deps: { alwaysBundle: [/.*/] },
+    entry: {
+      "daemon/main": "src/daemon/main.ts",
+      "hook/session-start": "src/hook/session-start.ts",
+      "hook/session-end": "src/hook/session-end.ts",
+      "hook/pre-tool-use": "src/hook/pre-tool-use.ts",
+    },
+  },
 ];
 
 export default defineConfig(buildConfigs);
