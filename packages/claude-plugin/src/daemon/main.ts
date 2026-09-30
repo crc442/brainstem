@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 import { createServer, type Server } from "node:net";
 import { unlinkSync } from "node:fs";
 import { homedir } from "node:os";

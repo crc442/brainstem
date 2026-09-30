@@ -12,9 +12,11 @@ describe("plugin manifest", () => {
     expect(manifest.description.length).toBeGreaterThan(0);
   });
 
-  test("package exposes the daemon and output-filter binaries", () => {
+  // publint rejects a bin whose target is missing, so each binary is declared only
+  // once its entry exists; brainstem-output joins in Task 12.
+  test("package exposes the daemon binary", () => {
     const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
     expect(pkg.name).toBe("@brainstem/claude-plugin");
-    expect(Object.keys(pkg.bin)).toEqual(expect.arrayContaining(["brainstemd", "brainstem-output"]));
+    expect(Object.keys(pkg.bin)).toEqual(expect.arrayContaining(["brainstemd"]));
   });
 });

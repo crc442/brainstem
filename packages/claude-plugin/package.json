@@ -12,8 +12,7 @@
     ".claude-plugin"
   ],
   "bin": {
-    "brainstemd": "./dist/daemon/main.mjs",
-    "brainstem-output": "./dist/output/filter.mjs"
+    "brainstemd": "./dist/daemon/main.mjs"
   },
   "scripts": {
     "prepack": "../../node_modules/.bin/tsdown --config ../../tsdown.config.ts --filter claude-plugin"
