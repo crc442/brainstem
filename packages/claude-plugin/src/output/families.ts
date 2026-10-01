@@ -61,6 +61,22 @@ export function isSimpleCommand(command: string): boolean {
 const FAILURE = /\b(FAIL|FAILED|ERROR|AssertionError|Expected|Received)\b|Error:|✗|×|^\s+at\s|\berror TS\d+\b/;
 const SUMMARY = /^(Tests?|Test Files|Suites?|Snapshots?|Duration|=+ (FAILURES|short test summary))/i;
 
+function isRepeatedProgressLine(line: string): boolean {
+  if (line.length <= 2000) return false;
+  const maxPeriod = Math.min(32, Math.floor(line.length / 2));
+  for (let period = 1; period <= maxPeriod; period++) {
+    let repeated = true;
+    for (let i = period; i < line.length; i++) {
+      if (line[i] !== line[i % period]) {
+        repeated = false;
+        break;
+      }
+    }
+    if (repeated) return true;
+  }
+  return false;
+}
+
 const capSlice = (text: string, cap: number): string => {
   let end = Math.min(text.length, cap);
   if (end > 0 && /[\uD800-\uDBFF]/.test(text[end - 1]!)) end--;
@@ -83,7 +99,9 @@ export function filterOutput(family: Family | null, text: string): string {
     const keep = new Set<number>();
     for (const index of diagnostics) {
       for (let i = Math.max(0, index - 3); i <= Math.min(lines.length - 1, index + 8); i++) {
-        if (lines[i]!.length > 2000 && !/\berror TS\d+\b/.test(lines[i]!)) continue;
+        // Only discard unmistakable repeated progress before a diagnostic.
+        // Long continuation values after the diagnostic belong to its evidence.
+        if (i < index && isRepeatedProgressLine(lines[i]!)) continue;
         keep.add(i);
       }
     }
@@ -107,7 +125,9 @@ export function filterOutput(family: Family | null, text: string): string {
     while (end + 1 < lines.length && lines[end + 1]!.trim() && !/^\s*PASS\b|^\s*✓(?:\s|$)/.test(lines[end + 1]!)) end++;
     for (let i = start; i <= end; i++) {
       if (/^\s*PASS\b|^\s*✓(?:\s|$)/.test(lines[i]!)) continue;
-      if (lines[i]!.length > 2000 && !FAILURE.test(lines[i]!)) continue;
+      // Failure blocks can contain long JSON, pretty-printed objects, or inline
+      // snapshots. Length alone does not make a continuation unrelated noise.
+      if (i < failureLine && isRepeatedProgressLine(lines[i]!)) continue;
       keep.add(i);
     }
   }
@@ -124,6 +144,10 @@ export function filterOutput(family: Family | null, text: string): string {
 
 /** Build a bounded, stream-aware source view before the shared review cap is applied. */
 export function presentOutput(family: Family | null, text: string, cap: number): { text: string; truncated: boolean } {
+  // A complete source view that already fits is the safest presentation: avoid
+  // filtering diagnostic continuations or manufacturing omission metadata.
+  if (text.length <= cap) return { text, truncated: false };
+
   const streams = /^(--- stdout ---[^\n]*\n)([\s\S]*?)(\n--- stderr ---[^\n]*\n)([\s\S]*)$/.exec(text);
   if (!streams) {
     const filtered = filterOutput(family, text);
@@ -183,12 +207,12 @@ export function presentOutput(family: Family | null, text: string, cap: number):
     ];
     return `${source.trimEnd()}${details.length ? ` (${details.join("; ")})` : ""}\n`;
   };
-  const result = `${head(streams[1]!, out, rawOut.length, filteredOut.length, outWasFiltered)}${out}\n${head(
+  const result = `${head(streams[1]!, out, rawOut.length, filteredOut.length, outWasFiltered)}${out}${head(
     streams[3]!,
     err,
     rawErr.length,
     filteredErr.length,
     errWasFiltered,
   )}${err}`;
-  return { text: result, truncated: outWasFiltered || errWasFiltered || outLimited || errLimited || result !== text };
+  return { text: result, truncated: outWasFiltered || errWasFiltered || outLimited || errLimited };
 }

@@ -145,6 +145,37 @@ describe("filterOutput", () => {
     expect(filtered).toContain("continuation detail");
   });
 
+  test("preserves long expected and actual JSON continuations", () => {
+    const expected = JSON.stringify({ expected_value: "E".repeat(2200) });
+    const actual = JSON.stringify({ actual_value: "A".repeat(2200) });
+    const source = `--- stdout ---\nFAIL math.test.ts\nExpected:\n${expected}\nReceived:\n${actual}\n  at math.test.ts:12:3\n\n--- stderr ---\n`;
+    const view = presentOutput("testrunner", source, 8000);
+    expect(source.length).toBeLessThan(8000);
+    expect(view).toEqual({ text: source, truncated: false });
+    expect(filterOutput("testrunner", source)).toContain(expected);
+    expect(filterOutput("testrunner", source)).toContain(actual);
+  });
+
+  test("preserves long TypeScript diagnostic continuations", () => {
+    const expected = `Expected value: ${"E".repeat(2200)}`;
+    const source = `--- stdout ---\nsrc/math.ts(12,3): error TS2322: Type mismatch\n${expected}\n  12 | const answer: number = value;\n     |       ^^^^^^^^^^^^^^^^^^^^^^^\n\n--- stderr ---\n`;
+    const filtered = filterOutput("tsc", source);
+    expect(filtered).toContain(expected);
+    const view = presentOutput("tsc", source, 8000);
+    expect(view).toEqual({ text: source, truncated: false });
+  });
+
+  test("reports real filtering and clipping above the presentation budget", () => {
+    const diagnostic = `FAIL math.test.ts\nExpected:\n${"E".repeat(10_000)}\nReceived:\n${"A".repeat(10_000)}`;
+    const source = `--- stdout ---\n${diagnostic}\n\n--- stderr ---\n`;
+    const view = presentOutput("testrunner", source, 8000);
+    expect(view.truncated).toBe(true);
+    expect(view.text.length).toBeLessThanOrEqual(8000);
+    expect(view.text).toContain("FAIL math.test.ts");
+    expect(view.text).toContain("showing");
+    expect(view.text).not.toBe(source);
+  });
+
   test("preserves pytest expected/actual blocks and stack frames", () => {
     const raw = [
       "============================= FAILURES =============================",
@@ -236,5 +267,16 @@ describe("filterOutput", () => {
 
   test("passes output through unchanged for an unknown family", () => {
     expect(filterOutput(null, "anything")).toBe("anything");
+  });
+});
+
+describe("presentOutput completeness", () => {
+  test.each([
+    ["stdout only", "--- stdout ---\nTests: 1 passed\n"],
+    ["stderr only", "--- stderr ---\nwarning: harmless\n"],
+    ["both streams", "--- stdout ---\nTests: 1 passed\n\n--- stderr ---\n"],
+    ["empty", ""],
+  ])("retains complete %s without reporting omissions", (_name, source) => {
+    expect(presentOutput("testrunner", source, 8000)).toEqual({ text: source, truncated: false });
   });
 });
