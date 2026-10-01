@@ -23,6 +23,26 @@ describe("request", () => {
     await new Promise<void>((resolve) => server.close(() => resolve()));
     rmSync(dir, { recursive: true, force: true });
   });
+
+  test("decodes a newline-framed JSON response split inside a multibyte character", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "bs-client-"));
+    const socket = join(dir, "split-utf8.sock");
+    const payload = Buffer.from(`${JSON.stringify({ kind: "error", message: "café 😀" })}\n`);
+    const split = payload.indexOf(Buffer.from("é")) + 1;
+    const server = createServer((conn) => {
+      conn.on("data", () => {
+        conn.write(payload.subarray(0, split));
+        setTimeout(() => conn.end(payload.subarray(split)), 20);
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(socket, resolve));
+    try {
+      await expect(request(socket, { kind: "ping" })).resolves.toEqual({ kind: "error", message: "café 😀" });
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("requestOrDefer", () => {

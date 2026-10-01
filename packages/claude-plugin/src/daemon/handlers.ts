@@ -4,7 +4,7 @@ import type { PluginConfig } from "../config";
 import { INTERACTIVE_TOOLS, toGateInput } from "../tools";
 import type { Request, Response, ReviewActionResponse } from "../protocol";
 import { buildWrapperCommand } from "../output/command";
-import { detectFamily, filterOutput } from "../output/families";
+import { detectFamily, presentOutput } from "../output/families";
 
 export interface DaemonState {
   reflexes: Reflexes;
@@ -130,8 +130,7 @@ export async function handle(request: Request, state: DaemonState): Promise<Resp
         context: { taskId: scope.taskId, revision: scope.revision },
         fallback: (text) => {
           const family = detectFamily(request.command ?? request.action);
-          const selected = filterOutput(family, text);
-          return { text: selected, truncated: selected !== text };
+          return presentOutput(family, text, REVIEW_CHAR_CAP);
         },
       });
       return {

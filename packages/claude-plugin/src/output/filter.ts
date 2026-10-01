@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { execFileSync } from "node:child_process";
 import { spawn, type ChildProcess } from "node:child_process";
 import { parseArgs } from "node:util";
 import { runIfEntry } from "../hook/io";
@@ -7,6 +8,8 @@ import type { ObserveResponse, Request, Response } from "../protocol";
 
 const STREAM_CAP = 256 * 1024;
 const REVIEW_TIMEOUT_MS = 15_000;
+const KILL_GRACE_MS = 2_000;
+const PIPE_DRAIN_GRACE_MS = 250;
 const REVIEW_UNAVAILABLE = "[brainstem] output review unavailable; captured command output withheld.";
 const SIGNAL_CODES: Partial<Record<NodeJS.Signals, number>> = {
   SIGHUP: 129,
@@ -18,40 +21,88 @@ const SIGNAL_CODES: Partial<Record<NodeJS.Signals, number>> = {
 interface CapturedStream {
   chunks: Buffer[];
   bytes: number;
-  omitted: boolean;
+  captureLimited: boolean;
+  complete: boolean;
   closed: boolean;
+  result: Promise<void>;
+  forceFinish(): void;
 }
 
 function streamCapture(child: ChildProcess, name: "stdout" | "stderr"): CapturedStream {
-  const stream = { chunks: [] as Buffer[], bytes: 0, omitted: false, closed: false };
+  const chunks: Buffer[] = [];
+  let bytes = 0;
+  let captureLimited = false;
+  let complete = false;
+  let closed = false;
+  let resolveResult!: () => void;
+  const result = new Promise<void>((resolve) => (resolveResult = resolve));
   const pipe = child[name];
   if (!pipe) {
-    stream.closed = true;
-    return stream;
+    closed = true;
+    complete = true;
+    resolveResult();
+    return { chunks, bytes, captureLimited, complete, closed, result, forceFinish() {} };
   }
+  const finish = (endedComplete: boolean) => {
+    if (closed) return;
+    closed = true;
+    complete = endedComplete;
+    resolveResult();
+  };
   pipe.on("data", (chunk: Buffer | string) => {
-    const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-    const keep = Math.max(0, Math.min(bytes.length, STREAM_CAP - stream.bytes));
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    const keep = Math.max(0, Math.min(buffer.length, STREAM_CAP - bytes));
     if (keep) {
-      stream.chunks.push(bytes.subarray(0, keep));
-      stream.bytes += keep;
+      chunks.push(buffer.subarray(0, keep));
+      bytes += keep;
     }
-    if (keep < bytes.length) stream.omitted = true;
+    if (keep < buffer.length) captureLimited = true;
   });
-  pipe.on("end", () => {
-    stream.closed = true;
-  });
-  return stream;
+  pipe.once("end", () => finish(true));
+  pipe.once("close", () => finish(false));
+  return {
+    get chunks() {
+      return chunks;
+    },
+    get bytes() {
+      return bytes;
+    },
+    get captureLimited() {
+      return captureLimited;
+    },
+    get complete() {
+      return complete;
+    },
+    get closed() {
+      return closed;
+    },
+    result,
+    forceFinish() {
+      if (closed) return;
+      finish(false);
+      pipe.destroy();
+    },
+  };
 }
 
-function renderedCapture(stdout: CapturedStream, stderr: CapturedStream): { text: string; complete: boolean } {
+function renderedCapture(stdout: CapturedStream, stderr: CapturedStream, executionComplete = true): { text: string; complete: boolean } {
   const out = decodeCapturedChunks(stdout.chunks);
   const err = decodeCapturedChunks(stderr.chunks);
   const sections = [
-    `--- stdout ---${stdout.omitted ? " [capture limit reached; additional bytes omitted]" : ""}\n${out}`,
-    `--- stderr ---${stderr.omitted ? " [capture limit reached; additional bytes omitted]" : ""}\n${err}`,
+    `--- stdout ---${stdout.captureLimited ? " [capture limit reached; additional bytes omitted]" : !stdout.complete ? " [stream capture incomplete]" : ""}\n${out}`,
+    `--- stderr ---${stderr.captureLimited ? " [capture limit reached; additional bytes omitted]" : !stderr.complete ? " [stream capture incomplete]" : ""}\n${err}`,
   ];
-  return { text: sections.join("\n"), complete: stdout.closed && stderr.closed && !stdout.omitted && !stderr.omitted };
+  return {
+    text: sections.join("\n"),
+    complete:
+      executionComplete &&
+      stdout.closed &&
+      stderr.closed &&
+      stdout.complete &&
+      stderr.complete &&
+      !stdout.captureLimited &&
+      !stderr.captureLimited,
+  };
 }
 
 export function decodeCapturedChunks(chunks: readonly Buffer[]): string {
@@ -64,11 +115,30 @@ function exitCode(code: number | null, signal: NodeJS.Signals | null): number {
 }
 
 export function forwardSignal(child: ChildProcess, signal: NodeJS.Signals): void {
+  if (!child.pid || process.platform === "win32") {
+    try {
+      child.kill(signal);
+    } catch {
+      // Process may have exited while cancellation was being forwarded.
+    }
+    return;
+  }
   try {
-    if (child.pid && process.platform !== "win32") process.kill(-child.pid, signal);
-    else child.kill(signal);
+    process.kill(-child.pid, signal);
   } catch {
-    // Process may have exited while cancellation was being forwarded.
+    try {
+      // Bun may reject negative pids before they reach kill(2). Use kill(1)
+      // as the CLI adapter does so the whole child process group is targeted.
+      execFileSync("kill", [`-${signal.slice(3)}`, "--", `-${child.pid}`], { stdio: "ignore" });
+      return;
+    } catch {
+      // The group may already have exited.
+    }
+    try {
+      child.kill(signal);
+    } catch {
+      // Process may have exited while cancellation was being forwarded.
+    }
   }
 }
 
@@ -132,60 +202,74 @@ export async function runWrapper(argv = process.argv.slice(2), reviewTimeoutMs =
   });
   const stdout = streamCapture(child, "stdout");
   const stderr = streamCapture(child, "stderr");
+  const exitPromise = new Promise<{ code: number | null; signal: NodeJS.Signals | null; spawnError?: Error }>((resolve) => {
+    child.once("exit", (code, signal) => resolve({ code, signal }));
+    child.once("error", (spawnError) => resolve({ code: null, signal: null, spawnError }));
+  });
   let interrupted: NodeJS.Signals | undefined;
-  let timeout: ReturnType<typeof setTimeout> | undefined;
-  const forward = (signal: NodeJS.Signals) => {
-    if (!interrupted) interrupted = signal;
-    forwardSignal(child, signal);
+  let killedBy: "timeout" | "cancelled" | undefined;
+  let forceKilled = false;
+  let killGraceTimer: ReturnType<typeof setTimeout> | undefined;
+  let drainTimer: ReturnType<typeof setTimeout> | undefined;
+  const forceKillGroup = () => {
+    if (forceKilled) return;
+    forceKilled = true;
+    if (killGraceTimer) clearTimeout(killGraceTimer);
+    forwardSignal(child, "SIGKILL");
+    // Descendants outside the group, or ones that retained pipe handles, cannot
+    // keep this wrapper alive after this bounded final drain.
+    drainTimer = setTimeout(() => {
+      stdout.forceFinish();
+      stderr.forceFinish();
+    }, PIPE_DRAIN_GRACE_MS);
   };
-  const onHup = () => forward("SIGHUP");
-  const onInt = () => forward("SIGINT");
-  const onQuit = () => forward("SIGQUIT");
-  const onTerm = () => forward("SIGTERM");
-  process.once("SIGHUP", onHup);
-  process.once("SIGINT", onInt);
-  process.once("SIGQUIT", onQuit);
-  process.once("SIGTERM", onTerm);
+  const beginTermination = (reason: "timeout" | "cancelled", signal: NodeJS.Signals) => {
+    if (killedBy) {
+      forceKillGroup();
+      return;
+    }
+    killedBy = reason;
+    if (reason === "cancelled") interrupted = signal;
+    forwardSignal(child, "SIGTERM");
+    killGraceTimer = setTimeout(forceKillGroup, KILL_GRACE_MS);
+    // The shell can exit on TERM while an in-group child ignores it. Reap the
+    // entire group as soon as the leader exits instead of waiting out the grace.
+    void exitPromise.then(() => forceKillGroup());
+  };
+  const onHup = () => beginTermination("cancelled", "SIGHUP");
+  const onInt = () => beginTermination("cancelled", "SIGINT");
+  const onQuit = () => beginTermination("cancelled", "SIGQUIT");
+  const onTerm = () => beginTermination("cancelled", "SIGTERM");
+  process.on("SIGHUP", onHup);
+  process.on("SIGINT", onInt);
+  process.on("SIGQUIT", onQuit);
+  process.on("SIGTERM", onTerm);
 
   let didTimeout = false;
-  timeout = setTimeout(
+  const timeout = setTimeout(
     () => {
       didTimeout = true;
-      forward("SIGTERM");
-      const kill = setTimeout(() => forward("SIGKILL"), 2_000);
-      kill.unref?.();
-      child.once("close", () => clearTimeout(kill));
+      beginTermination("timeout", "SIGTERM");
     },
     30 * 60 * 1000,
   );
   timeout.unref?.();
 
-  let closeResult: { code: number | null; signal: NodeJS.Signals | null };
-  try {
-    closeResult = await Promise.race([
-      new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
-        child.once("error", reject);
-        child.once("close", (code, signal) => resolve({ code, signal }));
-      }),
-    ]);
-  } catch {
-    clearTimeout(timeout);
-    process.removeListener("SIGINT", onInt);
-    process.removeListener("SIGHUP", onHup);
-    process.removeListener("SIGQUIT", onQuit);
-    process.removeListener("SIGTERM", onTerm);
-    process.stdout.write(`${REVIEW_UNAVAILABLE}\n`);
-    return 1;
+  const closeResult = await exitPromise;
+  if (closeResult.spawnError) {
+    stdout.forceFinish();
+    stderr.forceFinish();
   }
+  await Promise.all([stdout.result, stderr.result]);
   clearTimeout(timeout);
+  if (killGraceTimer) clearTimeout(killGraceTimer);
+  if (drainTimer) clearTimeout(drainTimer);
   process.removeListener("SIGINT", onInt);
   process.removeListener("SIGHUP", onHup);
   process.removeListener("SIGQUIT", onQuit);
   process.removeListener("SIGTERM", onTerm);
 
-  // Child close fires after both output pipes have closed. Do not send an incomplete
-  // claim while Node still has buffered stream data to deliver.
-  const captured = renderedCapture(stdout, stderr);
+  const captured = renderedCapture(stdout, stderr, !didTimeout && !interrupted && closeResult.signal === null);
   const code = didTimeout ? 124 : interrupted ? (SIGNAL_CODES[interrupted] ?? 130) : exitCode(closeResult.code, closeResult.signal);
   const output = await review(
     values.socket,

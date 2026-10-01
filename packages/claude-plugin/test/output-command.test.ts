@@ -18,12 +18,17 @@ describe("output wrapper command", () => {
     );
   });
 
-  test.each(["npm test:other", "npm test && echo done", "npm test | tee out", "echo npm test", "npm test > out"])(
-    "does not wrap %s",
-    (command) => {
-      expect(buildWrapperCommand({ executable: "node", entry: "filter.mjs", socket: "s", toolUseId: "id", command })).toBeUndefined();
-    },
-  );
+  test.each([
+    "npm test:other",
+    "npm test && echo done",
+    "npm test | tee out",
+    "echo npm test",
+    "npm test > out",
+    'npm test -- "a\\"b"; echo EXTRA #"',
+    'npm test -- "a\\"b"; cd /tmp',
+  ])("does not wrap %s", (command) => {
+    expect(buildWrapperCommand({ executable: "node", entry: "filter.mjs", socket: "s", toolUseId: "id", command })).toBeUndefined();
+  });
 
   test("wraps a single known test or typecheck command", () => {
     expect(

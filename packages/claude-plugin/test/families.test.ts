@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { detectFamily, isSimpleCommand, filterOutput } from "../src/output/families";
+import { detectFamily, isSimpleCommand, filterOutput, presentOutput } from "../src/output/families";
 
 describe("detectFamily", () => {
   test("recognizes test runners", () => {
@@ -55,6 +55,15 @@ describe("isSimpleCommand", () => {
     expect(isSimpleCommand("npx vitest run -t 'case; echo safe' # nope")).toBe(false);
     expect(isSimpleCommand("npx vitest run -t 'case; echo safe'")).toBe(true);
     expect(isSimpleCommand('npx vitest run -t "a $HOME"')).toBe(false);
+    expect(isSimpleCommand('npm test -- "a\\"b"; echo EXTRA #"')).toBe(false);
+    expect(isSimpleCommand('npm test -- "a\\"b"; cd /tmp')).toBe(false);
+    expect(isSimpleCommand('npm test -- "a\\\\b"')).toBe(true);
+    expect(isSimpleCommand('npm test -- "a\\$b"')).toBe(true);
+    expect(isSimpleCommand('npm test -- "a\\`b"')).toBe(true);
+    expect(isSimpleCommand("npm test -- 'quoted ; \" # data'\\ extra")).toBe(true);
+    expect(isSimpleCommand("npm test -- foo\\;bar")).toBe(true);
+    expect(isSimpleCommand("npm test -- foo\\\nbar")).toBe(false);
+    expect(isSimpleCommand('npm test -- "multi\nline"')).toBe(false);
   });
 });
 
@@ -98,6 +107,42 @@ describe("filterOutput", () => {
     expect(filtered).toContain("TS2322");
     expect(filtered).toContain("TS1005");
     expect(filtered).toContain("some banner");
+  });
+
+  test("prioritizes multiline tsc diagnostics after a long progress row", () => {
+    const raw = [
+      "progress ".repeat(1500),
+      "src/problem.ts(14,3): error TS2322: Type 'string' is not assignable to type 'number'.",
+      "  12 | const expected: number = value;",
+      "     |       ^^^^^^^^^^^^^^^^^^^^^^^^^",
+      "  13 |",
+      "  14 | const actual = expected;",
+      "     |               ~~~~~~~~",
+      "some diagnostic continuation",
+    ].join("\n");
+    const filtered = filterOutput("tsc", raw);
+    expect(filtered).not.toContain("progress ".repeat(20));
+    expect(filtered).toContain("src/problem.ts(14,3): error TS2322");
+    expect(filtered).toContain("expected: number");
+    expect(filtered).toContain("const actual = expected");
+    expect(filtered).toContain("some diagnostic continuation");
+  });
+
+  test("selects multiline test failure context after a long progress row", () => {
+    const raw = [
+      "progress ".repeat(1500),
+      "FAIL src/example.test.ts",
+      "  AssertionError: expected 1 to be 2",
+      "    Expected: 2",
+      "    Received: 1",
+      "      at src/example.test.ts:27:9",
+      "        continuation detail",
+    ].join("\n");
+    const filtered = filterOutput("testrunner", raw);
+    expect(filtered).not.toContain("progress ".repeat(20));
+    expect(filtered).toContain("FAIL src/example.test.ts");
+    expect(filtered).toContain("Expected: 2");
+    expect(filtered).toContain("continuation detail");
   });
 
   test("preserves pytest expected/actual blocks and stack frames", () => {
@@ -165,6 +210,28 @@ describe("filterOutput", () => {
     expect(filtered).not.toContain("PASS src/healthy.test.ts");
     expect(filtered).toContain("warning emitted by the test runtime");
     expect(filtered).toContain("details needed to interpret the failure");
+  });
+
+  test("reserves the bounded failure view for stderr after noisy stdout", () => {
+    const progress = "progress ".repeat(1200);
+    const diagnostic = [
+      "FAIL src/example.test.ts",
+      "  AssertionError: expected 1 to be 2",
+      "    Expected: 2",
+      "    Received: 1",
+      "      at src/example.test.ts:27:9",
+      "        continuation detail needed to locate the assertion",
+    ].join("\n");
+    const source = `--- stdout ---\n${progress}\n--- stderr ---\n${diagnostic}`;
+    const view = presentOutput("testrunner", source, 8000);
+    expect(view.truncated).toBe(true);
+    expect(view.text.length).toBeLessThanOrEqual(8000);
+    expect(view.text).toContain("showing");
+    expect(view.text).toContain("FAIL src/example.test.ts");
+    expect(view.text).toContain("Expected: 2");
+    expect(view.text).toContain("Received: 1");
+    expect(view.text).toContain("continuation detail");
+    expect(view.text.indexOf("FAIL src/example.test.ts")).toBeGreaterThan(view.text.indexOf("--- stderr ---"));
   });
 
   test("passes output through unchanged for an unknown family", () => {
