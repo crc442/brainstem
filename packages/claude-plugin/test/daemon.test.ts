@@ -8,6 +8,7 @@ import { request } from "../src/hook/client";
 import { loadRawConfig, resolveConfig, type RawConfig } from "../src/config";
 import { composeEnvironment } from "../src/environment";
 import { renderPreToolUse } from "../src/hook/pre-tool-use";
+import type { ObserveResponse } from "../src/protocol";
 
 // Destructive stays 0 so the disposition alone decides; a destructive score of 2
 // crosses denyDestructive (1.5) and turns every non-auto case into a deny.
@@ -50,6 +51,33 @@ describe("daemon reviewAction", () => {
   test("returns auto for a benign command", async () => {
     const { socket } = await start("auto_run");
     expect(await request(socket, bash("ls"))).toMatchObject({ kind: "reviewAction", action: "auto", mode: "active" });
+  });
+
+  test("wraps only active, auto-approved simple test and typecheck commands", async () => {
+    const { socket } = await start("auto_run");
+    for (const command of ["npm test", "bun run typecheck", "npx vitest run -t 'quotes; stay data'"]) {
+      expect(await request(socket, { ...bash(command), toolUseId: "tool use '☃'" })).toMatchObject({
+        action: "auto",
+        wrap: { command: expect.stringContaining("--command") },
+      });
+    }
+    for (const command of ["npm test:other", "npm test && echo x", "echo npm test"]) {
+      const response = await request(socket, { ...bash(command), toolUseId: "id" });
+      expect(response).toMatchObject({ action: "auto" });
+      expect(response).not.toHaveProperty("wrap");
+    }
+  });
+
+  test.each([
+    ["ask_user", {}],
+    ["auto_run", { modes: { gate: "shadow" } }],
+    ["auto_run", { modes: { gate: "off" } }],
+    ["auto_run", { modes: { sanitize: "shadow", verify: "shadow" } }],
+    ["auto_run", { modes: { sanitize: "off", verify: "off" } }],
+  ] as const)("does not rewrite when gate/output modes do not authorize review", async (disposition, raw) => {
+    const { socket } = await start(disposition, raw);
+    const response = await request(socket, { ...bash("npm test"), toolUseId: "id" });
+    expect(response).not.toHaveProperty("wrap");
   });
 
   test("defers a judged ask to the harness's own rules and permission mode", async () => {
@@ -195,5 +223,87 @@ describe("daemon reviewAction", () => {
     const { socket } = await start("auto_run");
     await request(socket, { kind: "shutdown" });
     await expect(request(socket, bash("ls"))).rejects.toThrow();
+  });
+});
+
+describe("daemon wrapper output presentation", () => {
+  test("preserves complete diagnostic evidence and reports omissions only when presentation loses source", async () => {
+    dir = mkdtempSync(join(tmpdir(), "bs-observe-presentation-"));
+    const socket = join(dir, "d.sock");
+    const judged: { content: string; truncated: boolean }[] = [];
+    const judge = mockSystemOne((state) => {
+      const envelope = state as { content: string; truncated: boolean };
+      judged.push({ content: envelope.content, truncated: envelope.truncated });
+      return {
+        contains_agent_directive: noulAnswer(0.01),
+        tries_to_override: noulAnswer(0.01),
+        requests_dangerous_action: noulAnswer(0.01),
+        severity: scoreAnswer(0, 0.95),
+        satisfies_intent: noulAnswer(0.9),
+        evidence_of_success: noulAnswer(0.9),
+        operational_failure: noulAnswer(0.01),
+        result_quality: scoreAnswer(2, 0.9),
+      };
+    });
+    const daemon = await createDaemon({ socket, judge, config: resolveConfig({}), root: dir });
+    stop = () => daemon.close();
+
+    const observe = async (command: string, text: string, status: "ok" | "error", complete = true): Promise<ObserveResponse> =>
+      (await request(socket, {
+        kind: "observe",
+        source: "wrapper",
+        tool: "Bash",
+        action: command,
+        command,
+        text,
+        status,
+        complete,
+        toolUseId: `observe-${judged.length}`,
+      })) as ObserveResponse;
+
+    const expected = JSON.stringify({ expected_value: "E".repeat(2200) });
+    const actual = JSON.stringify({ actual_value: "A".repeat(2200) });
+    const testFailure = `--- stdout ---\nFAIL math.test.ts\nExpected:\n${expected}\nReceived:\n${actual}\n  at math.test.ts:12:3\n\n--- stderr ---\n`;
+    const testResponse = await observe("npm test", testFailure, "error");
+    expect(judged.at(-1)).toEqual({ content: testFailure, truncated: false });
+    expect(testResponse).toMatchObject({ kind: "observe" });
+    expect(testResponse.text).toContain(expected);
+    expect(testResponse.text).toContain(actual);
+    expect(testResponse.text).not.toContain("output omitted");
+
+    const completeStreams: [string, string][] = [
+      ["stdout", "--- stdout ---\nTests: 1 passed\n"],
+      ["stderr", "--- stderr ---\nwarning: harmless\n"],
+    ];
+    for (const [streamName, source] of completeStreams) {
+      const response = await observe("npm test", source, "ok");
+      expect(judged.at(-1)).toEqual({ content: source, truncated: false });
+      expect(response.text).not.toContain("output omitted");
+      expect(response.text, streamName).toContain(source.trim());
+    }
+
+    const beforeEmpty = judged.length;
+    const emptyResponse = await observe("npm test", "", "ok");
+    expect(judged).toHaveLength(beforeEmpty);
+    expect(emptyResponse.text).not.toContain("output omitted");
+
+    const limitedResponse = await observe("npm test", "--- stdout ---\npartial output\n", "error", false);
+    expect(judged.at(-1)).toMatchObject({ content: expect.stringContaining("partial output"), truncated: true });
+    expect(limitedResponse.text).toContain("source capture limited");
+    expect(limitedResponse.text).not.toContain("output omitted");
+
+    const longTscValue = `Expected value: ${"T".repeat(2200)}`;
+    const tscFailure = `--- stdout ---\nsrc/math.ts(12,3): error TS2322: Type mismatch\n${longTscValue}\n  12 | const answer: number = value;\n     |       ^^^^^^^^^^^^^^^^^^^^^^^\n\n--- stderr ---\n`;
+    const tscResponse = await observe("npx tsc --noEmit", tscFailure, "error");
+    expect(judged.at(-1)).toEqual({ content: tscFailure, truncated: false });
+    expect(tscResponse.text).toContain(longTscValue);
+    expect(tscResponse.text).not.toContain("output omitted");
+
+    const noisyFailure = `--- stdout ---\n${"progress ".repeat(1200)}\nFAIL math.test.ts\nExpected:\n${"E".repeat(500)}\nReceived:\n${"A".repeat(500)}\n\n--- stderr ---\n`;
+    const oversizedResponse = await observe("npm test", noisyFailure, "error");
+    expect(judged.at(-1)?.truncated).toBe(true);
+    expect(judged.at(-1)?.content).toContain("FAIL math.test.ts");
+    expect(oversizedResponse.text).toContain("FAIL math.test.ts");
+    expect(oversizedResponse.text).toContain("output omitted; this host supplies no recovery tool");
   });
 });

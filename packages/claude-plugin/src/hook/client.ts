@@ -1,5 +1,6 @@
 import { connect } from "node:net";
 import { unlinkSync } from "node:fs";
+import { StringDecoder } from "node:string_decoder";
 import type { Request, Response } from "../protocol";
 
 const DEFAULT_TIMEOUT_MS = 10_000;
@@ -13,8 +14,12 @@ export const errorCode = (error: unknown): string => (error as NodeJS.ErrnoExcep
 export function request(socket: string, payload: Request, timeoutMs = DEFAULT_TIMEOUT_MS): Promise<Response> {
   return new Promise<Response>((resolve, reject) => {
     const client = connect(socket);
+    const decoder = new StringDecoder("utf8");
     let buffer = "";
+    let settled = false;
     const done = (error?: Error, response?: Response) => {
+      if (settled) return;
+      settled = true;
       clearTimeout(timer);
       client.destroy();
       if (error) reject(error);
@@ -23,7 +28,7 @@ export function request(socket: string, payload: Request, timeoutMs = DEFAULT_TI
     const timer = setTimeout(() => done(new Error(`brainstem daemon timed out after ${timeoutMs}ms`)), timeoutMs);
     client.on("connect", () => client.write(`${JSON.stringify(payload)}\n`));
     client.on("data", (chunk) => {
-      buffer += chunk.toString("utf8");
+      buffer += decoder.write(chunk);
       const newline = buffer.indexOf("\n");
       if (newline === -1) return;
       try {
@@ -33,7 +38,20 @@ export function request(socket: string, payload: Request, timeoutMs = DEFAULT_TI
       }
     });
     client.on("error", (error) => done(error));
-    client.on("close", () => done(new Error("brainstem daemon closed the connection")));
+    client.on("close", () => {
+      if (settled) return;
+      buffer += decoder.end();
+      const newline = buffer.indexOf("\n");
+      if (newline === -1) {
+        done(new Error("brainstem daemon closed the connection"));
+        return;
+      }
+      try {
+        done(undefined, JSON.parse(buffer.slice(0, newline)) as Response);
+      } catch (error) {
+        done(error as Error);
+      }
+    });
   });
 }
 

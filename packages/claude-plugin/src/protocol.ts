@@ -46,6 +46,8 @@ export interface ObserveRequest {
   action: string;
   text: string;
   status: "ok" | "error";
+  exitCode?: number;
+  signal?: string;
   complete: boolean;
   toolUseId?: string;
   command?: string;

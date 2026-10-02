@@ -3,6 +3,8 @@ import { REVIEW_CHAR_CAP, type PluginSession, type Reflexes } from "@brainstem/r
 import type { PluginConfig } from "../config";
 import { INTERACTIVE_TOOLS, toGateInput } from "../tools";
 import type { Request, Response, ReviewActionResponse } from "../protocol";
+import { buildWrapperCommand } from "../output/command";
+import { detectFamily, presentOutput } from "../output/families";
 
 export interface DaemonState {
   reflexes: Reflexes;
@@ -63,12 +65,32 @@ export async function handle(request: Request, state: DaemonState): Promise<Resp
       // composition, where host authorization lifts an ask but never a deny.
       // A floor ask, or a shell ask under classifyAllShell, must prompt over those rules.
       const mustPrompt = floor === "ask" || (classifyAllShell && gateInput.tool === "bash");
-      return {
+      const response: ReviewActionResponse = {
         kind: "reviewAction",
         action: decision === "ask" && !mustPrompt ? "skip" : decision,
         reasons: reviewed.decision?.reasons ?? [],
         mode: modes.gate,
       };
+      const command = request.input.command;
+      const outputReviewActive = modes.sanitize === "active" || modes.verify === "active";
+      if (
+        response.action === "auto" &&
+        modes.gate === "active" &&
+        outputReviewActive &&
+        request.tool === "Bash" &&
+        typeof command === "string" &&
+        request.toolUseId
+      ) {
+        const wrapped = buildWrapperCommand({
+          command,
+          executable: process.execPath,
+          entry: state.filterPath,
+          socket: state.socket,
+          toolUseId: request.toolUseId,
+        });
+        if (wrapped) response.wrap = { command: wrapped };
+      }
+      return response;
     }
     case "prepareMessage": {
       state.task = request.message;
@@ -86,9 +108,38 @@ export async function handle(request: Request, state: DaemonState): Promise<Resp
         recommendedIds: prepared.recommendation?.ids,
       };
     }
-    case "observe":
-      // Output review lands in Task 13, per-call outcomes in Task 17.
-      return { kind: "observe" };
+    case "observe": {
+      // Hook observations arrive after their output entered context and are advisory
+      // only. The wrapper path is the only path that can withhold source text.
+      if (request.source !== "wrapper") return { kind: "observe" };
+      const scope = state.session.scope();
+      const reviewed = await state.reflexes.processOutput({
+        capture: {
+          kind: "captured",
+          sourceId: request.toolUseId ?? "unknown-call",
+          stream: "stdout+stderr",
+          text: request.text,
+          completeness: request.complete ? "complete" : "limited",
+        },
+        task: state.session.task || state.task,
+        action: request.command ?? request.action,
+        status: request.status,
+        sanitize: state.config.modes.sanitize,
+        verify: state.config.modes.verify,
+        signal: scope.signal,
+        context: { taskId: scope.taskId, revision: scope.revision },
+        fallback: (text) => {
+          const family = detectFamily(request.command ?? request.action);
+          return presentOutput(family, text, REVIEW_CHAR_CAP);
+        },
+      });
+      return {
+        kind: "observe",
+        text: reviewed.text,
+        sanitize: reviewed.sanitize ? { action: reviewed.sanitize.action, reasons: reviewed.sanitize.reasons } : undefined,
+        verify: reviewed.verify ? { action: reviewed.verify.action, reasons: reviewed.verify.reasons } : undefined,
+      };
+    }
     case "batch":
       // Pulse's tool-turn cadence lands in Task 17.
       return { kind: "batch" };

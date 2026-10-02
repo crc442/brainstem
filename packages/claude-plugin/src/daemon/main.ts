@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { createServer, type Server } from "node:net";
+import { StringDecoder } from "node:string_decoder";
 import { unlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import { parseArgs } from "node:util";
@@ -65,8 +66,9 @@ export async function createDaemon(options: DaemonOptions): Promise<{ close(): P
   const server: Server = createServer((socket) => {
     resetIdle();
     let buffer = "";
+    const decoder = new StringDecoder("utf8");
     socket.on("data", async (chunk) => {
-      buffer += chunk.toString("utf8");
+      buffer += decoder.write(chunk);
       let newline = buffer.indexOf("\n");
       while (newline !== -1) {
         const line = buffer.slice(0, newline);
@@ -80,6 +82,9 @@ export async function createDaemon(options: DaemonOptions): Promise<{ close(): P
           socket.write(`${JSON.stringify({ kind: "error", message: String(error) })}\n`);
         }
       }
+    });
+    socket.on("end", () => {
+      buffer += decoder.end();
     });
     socket.on("error", () => socket.destroy());
   });
