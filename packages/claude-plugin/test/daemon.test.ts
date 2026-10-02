@@ -66,9 +66,71 @@ describe("daemon reviewAction", () => {
       expect(response).toMatchObject({ action: "auto" });
       expect(response).not.toHaveProperty("wrap");
     }
+    for (const runInBackground of [undefined, false]) {
+      const response = await request(socket, {
+        ...bash("npm test"),
+        input: { command: "npm test", ...(runInBackground === undefined ? {} : { run_in_background: false }) },
+        toolUseId: `foreground-${runInBackground ?? "omitted"}`,
+      });
+      expect(response).toMatchObject({ action: "auto", wrap: { command: expect.stringContaining("--command") } });
+    }
   });
 
   test.each([
+    ["sanitize", { modes: { sanitize: "active", verify: "off" } }],
+    ["verify", { modes: { sanitize: "off", verify: "active" } }],
+  ] as const)("wraps with %s as the only active output review", async (_name, raw) => {
+    const { socket } = await start("auto_run", raw);
+    expect(await request(socket, { ...bash("npm test"), toolUseId: "only-output-mode" })).toMatchObject({
+      action: "auto",
+      wrap: { command: expect.stringContaining("--command") },
+    });
+  });
+
+  test.each([
+    ["missing tool-use id", { ...bash("npm test"), toolUseId: undefined }, "auto"],
+    ["non-Bash tool", { ...bash("npm test"), tool: "Read", toolUseId: "read-call" }, "auto"],
+    ["plan mode", { ...bash("npm test"), permissionMode: "plan", toolUseId: "plan-call" }, "skip"],
+  ] as const)("does not wrap %s", async (_name, requestInput, action) => {
+    const { socket } = await start("auto_run");
+    const response = await request(socket, requestInput);
+    expect(response).toMatchObject({ action });
+    expect(response).not.toHaveProperty("wrap");
+  });
+
+  test("rewrites an eligible daemon response with allow and preserves the rest of Bash input", async () => {
+    const { socket } = await start("auto_run");
+    const input = { command: "npm test", timeout: 420_000, description: "run suite" };
+    const response = await request(socket, { ...bash("npm test"), input, toolUseId: "reviewed-call" });
+    const rendered = renderPreToolUse(response, input).hookSpecificOutput;
+    expect(response).toMatchObject({ action: "auto", wrap: { command: expect.stringContaining("--command") } });
+    expect(rendered).toMatchObject({
+      hookEventName: "PreToolUse",
+      permissionDecision: "allow",
+      updatedInput: { ...input, command: (response as { wrap: { command: string } }).wrap.command },
+    });
+    expect(rendered?.permissionDecisionReason).toContain("output review");
+  });
+
+  test("does not wrap an explicitly background command, but keeps Gate's auto verdict", async () => {
+    const { socket } = await start("auto_run");
+    const response = await request(socket, {
+      ...bash("npm test"),
+      input: { command: "npm test", run_in_background: true },
+      toolUseId: "background-tool-use",
+    });
+    expect(response).toMatchObject({ kind: "reviewAction", action: "auto", mode: "active" });
+    expect(response).not.toHaveProperty("wrap");
+    expect(renderPreToolUse(response, { command: "npm test", run_in_background: true }).hookSpecificOutput).toMatchObject({
+      permissionDecision: "allow",
+    });
+    expect(renderPreToolUse(response, { command: "npm test", run_in_background: true }).hookSpecificOutput).not.toHaveProperty(
+      "updatedInput",
+    );
+  });
+
+  test.each([
+    ["deny", {}],
     ["ask_user", {}],
     ["auto_run", { modes: { gate: "shadow" } }],
     ["auto_run", { modes: { gate: "off" } }],

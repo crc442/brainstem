@@ -79,6 +79,7 @@ export async function handle(request: Request, state: DaemonState): Promise<Resp
         outputReviewActive &&
         request.tool === "Bash" &&
         typeof command === "string" &&
+        request.input.run_in_background !== true &&
         request.toolUseId
       ) {
         const wrapped = buildWrapperCommand({
