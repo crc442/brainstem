@@ -4,7 +4,7 @@ Public repo. Never commit secrets or content from `internal/`.
 
 ## Toolchain
 
-Bun 1.4.2 (pinned in `package.json`) must be the first `bun` on PATH, not just the binary you invoke: tsdown shells out to `bun pm pack` for `build:check`, and older Bun releases (e.g. 1.1.6) have no `pm pack`. Check with `bun --version`.
+Bun 1.4.3 (pinned in `package.json`) must be the first `bun` on PATH, not just the binary you invoke: tsdown shells out to `bun pm pack` for `build:check`, and older Bun releases (e.g. 1.1.6) have no `pm pack`. Check with `bun --version`.
 
 ## Verify
 
