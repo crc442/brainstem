@@ -22,6 +22,7 @@
     "packages/*/src",
     "packages/*/test",
     "packages/*/examples",
+    "packages/*/scripts",
     "vitest.config.ts",
     "tsdown.config.ts",
     "tsdown.check.config.ts"

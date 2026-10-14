@@ -27,7 +27,7 @@ jobs:
           package-manager-cache: false
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.4.2
+          bun-version: 1.4.3
       - run: bun install --frozen-lockfile
       - id: select-mode
         uses: changesets/action/select-mode@v2
@@ -49,7 +49,7 @@ jobs:
           package-manager-cache: false
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.4.2
+          bun-version: 1.4.3
       - run: bun install --frozen-lockfile
       - uses: changesets/action/version@v2
         with:
@@ -73,7 +73,7 @@ jobs:
           package-manager-cache: false
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.4.2
+          bun-version: 1.4.3
       - run: bun install --frozen-lockfile
       - run: bun run typecheck
       - run: bun run test
@@ -99,7 +99,7 @@ jobs:
           package-manager-cache: false
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.4.2
+          bun-version: 1.4.3
       - run: bun install --frozen-lockfile
       - uses: changesets/action/publish@v2
         with:

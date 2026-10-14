@@ -1,7 +1,7 @@
 {
   "name": "brainstem",
   "private": true,
-  "packageManager": "bun@1.4.2",
+  "packageManager": "bun@1.4.3",
   "type": "module",
   "workspaces": [
     "packages/*"
@@ -30,6 +30,7 @@
     "typecheck": "tsc --noEmit --incremental --tsBuildInfoFile .cache/typecheck.tsbuildinfo -p tsconfig.json",
     "build": "tsdown",
     "build:check": "tsdown --config tsdown.check.config.ts",
+    "verify:plugin": "bun run build && bun run packages/claude-plugin/scripts/verify-build.ts",
     "format": "oxfmt --write \"packages/**/*.ts\" \"packages/*/package.json\" \"experiments/**/*.ts\" \"*.ts\" \"*.json\" \".ox*.json\"",
     "format:check": "oxfmt --check \"packages/**/*.ts\" \"packages/*/package.json\" \"experiments/**/*.ts\" \"*.ts\" \"*.json\" \".ox*.json\"",
     "lint": "oxlint --deny-warnings packages experiments tsdown.config.ts tsdown.check.config.ts vitest.config.ts"
@@ -40,7 +41,7 @@
   "devDependencies": {
     "@arethetypeswrong/core": "0.18.5",
     "@changesets/cli": "3.0.3",
-    "@types/bun": "1.4.2",
+    "@types/bun": "1.4.3",
     "oxfmt": "0.70.0",
     "oxlint": "1.83.0",
     "publint": "0.3.24",
