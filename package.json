@@ -30,6 +30,7 @@
     "typecheck": "tsc --noEmit --incremental --tsBuildInfoFile .cache/typecheck.tsbuildinfo -p tsconfig.json",
     "build": "tsdown",
     "build:check": "tsdown --config tsdown.check.config.ts",
+    "verify:plugin": "bun run build && bun run packages/claude-plugin/scripts/verify-build.ts",
     "format": "oxfmt --write \"packages/**/*.ts\" \"packages/*/package.json\" \"experiments/**/*.ts\" \"*.ts\" \"*.json\" \".ox*.json\"",
     "format:check": "oxfmt --check \"packages/**/*.ts\" \"packages/*/package.json\" \"experiments/**/*.ts\" \"*.ts\" \"*.json\" \".ox*.json\"",
     "lint": "oxlint --deny-warnings packages experiments tsdown.config.ts tsdown.check.config.ts vitest.config.ts"
